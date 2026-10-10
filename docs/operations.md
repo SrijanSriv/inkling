@@ -52,6 +52,8 @@ The optional `inkling-webhook.service` runs a separate Python receiver on loopba
 Expose only this receiver with a persistent HTTPS tunnel such as Tailscale Funnel, never the assistant, browser,
 coding worker or a data directory. Funnel requires its account-level HTTPS/Funnel setup; `tailscale funnel --bg
 http://127.0.0.1:8789` persists across reboots. Its public URL plus `/github` is the webhook endpoint.
+If the client says `serve config denied`, an administrator must run that command with `sudo`. A node-not-found
+error on the setup link can mean the browser is signed into a different Tailscale network from the Pi.
 
 Add `webhook_repository_id` (GitHub's numeric repository ID), `webhook_secret` (a private file containing a random
 signing secret of at least 32 bytes) and optional `webhook_port` to the Pi's private operations configuration.
