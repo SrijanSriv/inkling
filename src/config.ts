@@ -38,6 +38,10 @@ export const config = {
   // Where people's browsers reach the Google sign-in callback. localhost works for whoever is on this computer;
   // friends on their own phones need a public HTTPS address (see README).
   publicUrl: (process.env.INKLING_PUBLIC_URL ?? "http://localhost:8787").replace(/\/$/, ""),
+  // Optional assistant mailbox: shared sending, never shared inbox access.
+  mailUserId: process.env.INKLING_MAIL_USER_ID || undefined,
+  mailAccount: process.env.INKLING_MAIL_ACCOUNT?.trim().toLowerCase() || undefined,
+  mailGroups: (process.env.INKLING_MAIL_GROUPS ?? "").split(",").map(s => s.trim()).filter(Boolean),
   // User id to text when inkling starts (e.g. after a deploy), so you know it's live. Empty for none.
   announceTo: process.env.INKLING_ANNOUNCE_TO || undefined,
   host: process.env.INKLING_HOST ?? "127.0.0.1",

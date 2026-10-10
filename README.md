@@ -92,8 +92,18 @@ It answers when someone says its name, @mentions it, or replies to it, and only 
 say "inkling speak to everyone" (or `/open`) to let anyone in that group talk to it there, and "inkling only talk to
 people on your list" (or `/close`) to undo it. With `INKLING_OPEN_GROUPS=true`, a group with someone from the list in it
 is open from the start (an admin can still `/close` it); a group with nobody from the list always stays closed.
-Groups have their own memory, email and personal WhatsApp tools are
-never available there, and calendars only share when people are busy, never what the events are.
+Groups have their own memory. Personal inbox and WhatsApp tools are never available there, and calendars only
+share when people are busy, never what the events are.
+
+Optional shared sending uses one assistant mailbox already connected through Google. Configure
+`INKLING_MAIL_USER_ID` (the connecting user id) and `INKLING_MAIL_ACCOUNT` (the exact Gmail address) to let everyone
+in `data/users.json` request mail in DMs. Set `INKLING_MAIL_GROUPS` to comma-separated internal group chat ids to
+allow requests in selected groups too. Shared sending defaults to the assistant mailbox; personal Gmail accounts
+remain private to their owners. Each request gets an exact preview and needs the requester's yes in a later private
+message within 30 minutes. Group requests are previewed privately, and another person cannot confirm them. Access
+is checked again before sending, including current registration, group permission and the connected account.
+The shared mailbox does not grant inbox/search access to other users. Sent mail is visible to whoever owns that
+mailbox. The feature stays off unless configured.
 
 ## How it works
 

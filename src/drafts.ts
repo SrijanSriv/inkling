@@ -9,6 +9,9 @@ export type Draft = {
   name: string;
   subject?: string;
   from?: string;
+  /** Shared assistant mail is re-authorized for this requester and originating group before sending. */
+  emailShared?: boolean;
+  emailGroupId?: string;
   text: string;
   /** For a Google Calendar invite: the call to make once they say yes. */
   invite?: Record<string, unknown>;

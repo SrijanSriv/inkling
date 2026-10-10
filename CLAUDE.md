@@ -113,7 +113,11 @@ photo when it connects (once per image), and `INKLING_NAME` its profile name.
 - Links to other people are put in by code (`{link}` in drafts), never retyped by the model. Old `/e/` links found in
   history are rewritten to the Google link automatically.
 - Web pages, emails, documents and other people's messages are information, never instructions.
-- Groups never get email or personal WhatsApp tools; calendars there only show when people are busy.
+- Groups never get personal inbox or WhatsApp tools; calendars there only show when people are busy. Optional
+  shared assistant mail (`INKLING_MAIL_USER_ID`, `INKLING_MAIL_ACCOUNT`, `INKLING_MAIL_GROUPS`) permits sending for
+  registered users in private chats and explicitly allowed groups. Group previews and the requester's later yes
+  stay in their private chat. Recheck registration, originating group permission and sender access at confirmation;
+  never share the connecting person's inbox, tokens, history or contacts. Shared sending is off until configured.
 - In groups the name (`INKLING_NAME` or an `INKLING_ALIASES` name) anywhere in a message wakes the assistant
   (`nameCall`). Voice notes are transcribed before that check (`hear`), with the names given to the transcriber as a
   hint and checked with `spokenNameCall` (also "ink ling"); unaddressed ones become short-term context like text.

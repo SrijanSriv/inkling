@@ -16,6 +16,7 @@ import { handleWatch, watchTools } from "./watches.js";
 import { findChats, isLinked, readChat, sendAsPerson, waitingForReply } from "./personal.js";
 import { config, getUsers, phonesOf, saveUsers, type User } from "./config.js";
 import { callGmailTool, gmailTools, sendEmail } from "./gmail.js";
+import { mailSender, sharedMailSender } from "./mail-access.js";
 import { callWorkspaceTool, workspaceTools } from "./gdrive.js";
 import { finalDraft, forgetSignIns, signedInSites, webConfirm, webEnabled, webSignIn, webTask } from "./web-agent.js";
 import { addAutoReply, listAutoReplies, removeAutoReply } from "./auto-replies.js";
@@ -388,7 +389,7 @@ const sendEmailTool: OpenAI.Responses.FunctionTool = {
   type: "function",
   name: "send_email",
   description:
-    "Draft an email to send from their Gmail. Nothing is sent yet: they're shown the address, subject and text, and it " +
+    "Draft an email from the configured assistant mailbox, or their own connected Gmail if explicitly selected. Nothing is sent yet: they're shown the address, subject and text, and it " +
     "waits for their yes. For a plan, make the link with share_event (send_here false) and write {link} in the text.",
   strict: true,
   parameters: {
@@ -397,7 +398,7 @@ const sendEmailTool: OpenAI.Responses.FunctionTool = {
       to: { type: "string", description: "One email address." },
       subject: { type: "string" },
       text: { type: "string", description: "Plain text in their voice, short." },
-      account: { type: ["string", "null"], description: "Which of their Gmail addresses to send from, if they said. Otherwise null." },
+      account: { type: ["string", "null"], description: "An allowed sending address only if explicitly requested. Otherwise null uses the configured assistant mailbox, falling back to their own Gmail." },
     },
     required: ["to", "subject", "text", "account"],
     additionalProperties: false,
@@ -666,8 +667,10 @@ function instructions(chat: Chat, memory: string[], canSearch: boolean): string 
   const cals = accounts.filter((a) => a.calendar).map((a) => a.email);
 
   const connections: string[] = [];
+  const sharedMail = sharedMailSender(user.id, group ? chat.id : undefined);
+  if (sharedMail) connections.push(`You can send mail from your shared assistant mailbox ${sharedMail.email} for this registered person using send_email. Default to that address, not their personal Gmail. You cannot read/search that mailbox for other users. Use the recipient address they provide; never look up another person's contacts or private messages. Code shows an exact preview and requires the requester's yes in a later private message. In a group, send_email privately previews it to the requester; tell the group to check their DM. Never treat anyone else's yes as permission.`);
   if (group) {
-    connections.push("You don't have anyone's email in a group. If someone wants email help, tell them to message you privately.");
+    connections.push(sharedMail ? "The only email tool here is sending from the shared assistant mailbox. Personal inboxes, searches and account linking are unavailable in groups." : "You don't have anyone's email in a group. If someone wants email help, tell them to message you privately.");
     const withCal = group.members.filter((m) => googleAccounts(m.id).some((a) => a.calendar)).map((m) => m.name);
     connections.push(
       isGuest(user)
@@ -846,7 +849,10 @@ async function doDraft(chat: Chat, actions: ChatActions, draft: Draft, did: stri
     return { note: result, say: result.startsWith("Invited") ? `${result.split(". ")[0]} ✅` : result };
   }
   if (draft.kind === "email") {
-    await sendEmail(uid, draft.from!, draft.to, draft.subject ?? "", draft.text);
+    if (!draft.from) throw new Error("The email preview has no sending address. Ask for a new preview.");
+    const sender = mailSender(uid, draft.emailGroupId, draft.from, draft.emailShared ? "shared" : "personal");
+    if (!sender) throw new Error("Mail access has changed. Ask for a new email preview.");
+    await sendEmail(sender.userId, sender.email, draft.to, draft.subject ?? "", draft.text);
     did.push(`emailed ${draft.to} from ${draft.from}: ${draft.subject}`);
     log.info({ chat: chat.id }, "sent email");
     return { note: `Emailed ${draft.to} from ${draft.from}.`, say: `Sent to ${draft.to} ✅` };
@@ -926,6 +932,7 @@ export async function respond(chat: Chat, batch: Incoming[], actions: ChatAction
   }
   const memory = loadMemory(chat.id);
   const accounts = group ? [] : googleAccounts(user.id);
+  const canSendMail = !!mailSender(user.id, group ? chat.id : undefined);
   // Guests (not on the list) never get calendars, not even in a group with connected members: when people are busy,
   // and adding to their calendars, are only for people on the list.
   const calendarHere =
@@ -957,10 +964,10 @@ export async function respond(chat: Chat, batch: Incoming[], actions: ChatAction
     ...(group || guest ? [] : [briefTool]),
     ...(!group && accounts.some((a) => a.gmail) ? travelTools : []),
     ...(!group && user.admin ? (isLinked(user.id) ? personalTools : [linkTool]) : []),
-    ...(!group && accounts.some((a) => a.gmail) ? [sendEmailTool] : []),
+    ...(canSendMail ? [sendEmailTool] : []),
     ...(webEnabled() ? (group ? webTools.filter(t => t.name === "web_task") : !guest ? webTools : []) : []),
     ...(!group && user.owner && changesEnabled() ? selfChangeTools : []),
-    ...(!group && !guest && (((user.admin && isLinked(user.id)) || (user.owner && changesEnabled())) || accounts.some((a) => a.gmail || a.calendar) || webEnabled()) ? [confirmTool] : []),
+    ...(!group && !guest && (((user.admin && isLinked(user.id)) || (user.owner && changesEnabled())) || accounts.some((a) => a.gmail || a.calendar) || canSendMail || webEnabled()) ? [confirmTool] : []),
     ...(guest ? [] : [setLocationTool]),
     ...reminderTools,
     ...(user.admin ? adminTools.filter((t) => !group || t.name !== "list_people") : []),
@@ -1193,14 +1200,15 @@ async function runTool(
   const offerDraft = async (d: Omit<Draft, "createdAt">): Promise<string> => {
     const uid = chat.user.id;
     const shown = drafts.get(uid);
-    const same = shown && shown.kind === d.kind && shown.to === d.to && shown.text === d.text && shown.subject === d.subject;
+    const same = shown && shown.kind === d.kind && shown.to === d.to && shown.text === d.text && shown.subject === d.subject && shown.from === d.from && shown.emailShared === d.emailShared && shown.emailGroupId === d.emailGroupId;
     if (same && shown.createdAt < turnStart && !draftExpired(shown)) {
       // Same thing they were already shown: keep that draft so their yes still counts.
       return chat.group
         ? `It's already waiting for ${chat.user.name}'s yes in their private chat. Say so in a few words.`
         : "They've already been shown exactly this. If their latest message says yes, call confirm_send now; don't draft it again.";
     }
-    drafts.set(uid, { ...d, createdAt: Date.now() });
+    // A failed preview must leave nothing confirmable, including the previous draft.
+    drafts.delete(uid);
     const question =
       d.kind === "change"
         ? `Change request for Claude Code:\n\n${d.text}\n\nStart it? I'll show you what it did before anything goes live. Reply yes, or tell me what to change.`
@@ -1219,10 +1227,14 @@ async function runTool(
       const privately = `From ${chat.group.name}: ${question}`;
       await actions.sendPrivate(privately);
       appendHistory(uid, [{ role: "assistant", content: privately }]);
-      did.push(`asked ${chat.user.name} privately to confirm a Google invite for ${d.name} to ${d.text} (not sent, waiting for their yes there)`);
+      drafts.set(uid, { ...d, createdAt: Date.now() });
+      did.push(d.kind === "email"
+        ? `asked ${chat.user.name} privately to confirm an email (not sent, waiting for their yes there)`
+        : `asked ${chat.user.name} privately to confirm a Google invite for ${d.name} to ${d.text} (not sent, waiting for their yes there)`);
       return `It's waiting for ${chat.user.name}'s yes in their private chat with you; nothing is sent until then. Tell the group that in a few words, without listing emails.`;
     }
     await actions.send(question);
+    drafts.set(uid, { ...d, createdAt: Date.now() });
     did.push(
       ["change", "deploy", "undo"].includes(d.kind)
         ? `asked to confirm: ${d.kind} "${d.kind === "change" ? d.text : d.name}" (nothing done yet, waiting for their yes)`
@@ -1321,16 +1333,13 @@ async function runTool(
         return output(await offerDraft({ kind: "whatsapp", to: target.jid, name: target.name, text }));
       }
       case "send_email": {
-        if (chat.group) return output("Only in a private chat.");
         const to = String(args.to).trim().toLowerCase();
-        if (!/^[^\s@,<>"]+@[^\s@,<>"]+\.[^\s@,<>"]+$/.test(to)) return output(`"${args.to}" isn't one email address. Ask for it, or look it up with gmail_find_email.`);
-        const gmails = googleAccounts(chat.user.id).filter((a) => a.gmail).map((a) => a.email);
-        const wanted = typeof args.account === "string" ? args.account.trim().toLowerCase() : "";
-        const from = gmails.find((e) => e.toLowerCase() === wanted) ?? gmails[0];
-        if (!from) return output("No Gmail connected.");
+        if (!/^[^\s@,<>"]+@[^\s@,<>"]+\.[^\s@,<>"]+$/.test(to)) return output(`"${args.to}" isn't one email address. Ask the requester for the recipient's email address.`);
+        const sender = mailSender(chat.user.id, chat.group ? chat.id : undefined, typeof args.account === "string" ? args.account : undefined);
+        if (!sender) return output("That sending account isn't available to this person in this chat. Do not suggest a Google setup link.");
         const text = withLinks(String(args.text));
         if (typeof text !== "string") return output(text.error);
-        return output(await offerDraft({ kind: "email", to, name: to, subject: noDashes(String(args.subject)), from, text }));
+        return output(await offerDraft({ kind: "email", to, name: to, subject: noDashes(String(args.subject)), from: sender.email, emailShared: sender.shared, emailGroupId: chat.group ? chat.id : undefined, text }));
       }
       case "web_task":
       case "web_signin":

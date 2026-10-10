@@ -37,6 +37,7 @@ function privacyPage(): string {
     ["How it's stored", [
       `Your chat history, notes, connections and sign-ins are stored separately for each person on the owner's server, encrypted, and never shared with other people. In group chats it only ever shares when people are busy, never what their events are.`,
       `Anything that goes out as you (a WhatsApp message, an email, a calendar invite, a payment) is shown to you first and only happens after you say yes.`,
+      ...(config.mailUserId && config.mailAccount ? [`Registered users can also ask for mail from the shared assistant mailbox. Group requests are previewed privately and require the requester's later yes. This grants sending only, not access to anyone else's inbox. Sent emails are visible to the mailbox owner.`] : []),
       ...(guests
         ? [`If you try ${n} as a guest, your chat with it is stored the same way, encrypted and only for you, and how many messages you've sent today is counted under an anonymous code.`]
         : []),
