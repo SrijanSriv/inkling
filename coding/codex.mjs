@@ -7,6 +7,8 @@ export class Codex {
   constructor(options, onEvent) { this.options = options; this.onEvent = onEvent; this.pending = new Map(); this.next = 0; }
   async start(cwd) {
     const { runtime, auth, bin, version, toolRoots = [] } = this.options;
+    const webSearch = this.options.webSearch || 'live';
+    if (!['live', 'cached', 'disabled'].includes(webSearch)) throw new Error('Invalid coding web search mode.');
     const installed = execFileSync(bin, ['--version'], { encoding: 'utf8' }).trim();
     if (installed !== `codex-cli ${version}`) throw new Error('Codex version changed; worker compatibility preflight required.');
     fs.mkdirSync(runtime, { recursive: true, mode: 0o700 });
@@ -16,8 +18,8 @@ export class Codex {
     const roots = toolRoots.map(p => `${JSON.stringify(p)} = "read"`).join('\n');
     const filesystem = ['":minimal"="read"', ...toolRoots.map(p => `${JSON.stringify(p)}="read"`), '":workspace_roots"={"."="write"}'].join(',');
     // CLI overrides win over project configuration, including on an evicted session's restart.
-    const flags = ['-c', 'default_permissions="coding"', '-c', `permissions={coding={filesystem={${filesystem}},network={enabled=false}}}`, '-c', 'approval_policy="never"', '-c', 'mcp_servers={}', '-c', 'hooks={}', '-c', 'web_search="disabled"'];
-    fs.writeFileSync(path.join(runtime, 'config.toml'), `approval_policy = "never"\ndefault_permissions = "coding"\nweb_search = "disabled"\n[history]\npersistence = "none"\n[analytics]\nenabled = false\n[permissions.coding.filesystem]\n":minimal" = "read"\n${roots}\n[permissions.coding.filesystem.":workspace_roots"]\n"." = "write"\n[permissions.coding.network]\nenabled = false\n`, { mode: 0o600 });
+    const flags = ['-c', 'default_permissions="coding"', '-c', `permissions={coding={filesystem={${filesystem}},network={enabled=false}}}`, '-c', 'approval_policy="never"', '-c', 'mcp_servers={}', '-c', 'hooks={}', '-c', `web_search=${JSON.stringify(webSearch)}`];
+    fs.writeFileSync(path.join(runtime, 'config.toml'), `approval_policy = "never"\ndefault_permissions = "coding"\nweb_search = ${JSON.stringify(webSearch)}\n[history]\npersistence = "none"\n[analytics]\nenabled = false\n[permissions.coding.filesystem]\n":minimal" = "read"\n${roots}\n[permissions.coding.filesystem.":workspace_roots"]\n"." = "write"\n[permissions.coding.network]\nenabled = false\n`, { mode: 0o600 });
     const env = { PATH: this.options.path, HOME: runtime, CODEX_HOME: runtime, XDG_CONFIG_HOME: runtime, XDG_CACHE_HOME: runtime, TMPDIR: path.join(cwd, '.tmp'), LANG: 'C.UTF-8', RUST_LOG: 'off' };
     fs.mkdirSync(env.TMPDIR, { recursive: true });
     this.busEnv = { PATH: this.options.path, XDG_RUNTIME_DIR: `/run/user/${process.getuid()}`, DBUS_SESSION_BUS_ADDRESS: `unix:path=/run/user/${process.getuid()}/bus` };

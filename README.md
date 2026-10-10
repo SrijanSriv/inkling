@@ -223,6 +223,11 @@ Only run one copy at a time: two copies on one WhatsApp session keep kicking eac
 People then text `/connect google` (or just ask) and get a one-time sign-in link. `http://localhost:8787` only works
 on the computer running inkling; for friends' phones, run it somewhere with a public HTTPS address (next step).
 
+For a mail-only deployment, set `INKLING_GOOGLE_SERVICES=gmail` and enable only the Gmail API. This limits new
+sign-ins to Gmail reading and drafts/sending. The optional comma-separated setting also accepts `calendar`,
+`drive`, `docs`, `sheets` and `tasks`; include at least Gmail, Calendar or Drive to identify the connected account.
+Without the setting, sign-in continues to request all six services. Existing grants remain until disconnected.
+
 ### 4. Hosting it
 
 inkling needs a long-lived process and a persistent disk for `data/`. A public HTTPS address is only needed for
@@ -534,6 +539,16 @@ INKLING_CODING_SECRET=<same API secret as laptop>
 Enable both user services, enable user lingering for startup without an interactive login, and restart Inkling after
 typechecking. No public ports or remote Codex endpoint are needed. Changing the installed Codex version deliberately
 fails the worker's version check until its protocol and permissions are revalidated.
+
+Public GitHub repositories can also be requested by their exact HTTPS repository URL. A separate preparation step
+downloads the default-branch source before Codex starts, without GitHub credentials or Git hooks. Downloads are
+capped at 20 MB compressed / 50 MB extracted; unsafe archive paths, escaping links and links to directories are rejected. Internal file symlinks are
+materialized as ordinary files. Imports require an empty
+project and never overwrite existing source. Failed imports can be retried by continuing the same job with its URL.
+Codex can research online documentation through its built-in hosted web search, independently of command
+networking. `INKLING_CODING_WEB_SEARCH` selects `live` (default), `cached`, or `disabled`. Project command
+networking remains disabled. Private repositories, arbitrary download URLs and dependency
+installation are not supported. Imported source is a snapshot, without Git metadata.
 
 Existing source folders can be registered through a trusted `INKLING_CODING_IMPORTS_FILE` JSON mapping of aliases
 to absolute paths. On worker startup, each new alias gets a separate sanitized source copy; originals are never

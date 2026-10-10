@@ -25,7 +25,7 @@ const worker = new Worker({
   key: env.INKLING_CODING_STATE_KEY, runtime,
   previewUrl: env.INKLING_CODING_PREVIEW_URL?.replace(/\/$/, ''),
   timeout: Number(env.INKLING_CODING_TIMEOUT_MS || 1_800_000),
-  codex: { managed: true, bin: env.INKLING_CODING_BIN || 'codex', version: env.INKLING_CODING_CODEX_VERSION || '0.162.1', auth: env.INKLING_CODING_AUTH_FILE || path.join(os.homedir(), '.codex/auth.json'), path: env.PATH, toolRoots: (env.INKLING_CODING_TOOL_ROOTS || '').split(':').filter(Boolean) },
+  codex: { managed: true, webSearch: env.INKLING_CODING_WEB_SEARCH || 'live', bin: env.INKLING_CODING_BIN || 'codex', version: env.INKLING_CODING_CODEX_VERSION || '0.162.1', auth: env.INKLING_CODING_AUTH_FILE || path.join(os.homedir(), '.codex/auth.json'), path: env.PATH, toolRoots: (env.INKLING_CODING_TOOL_ROOTS || '').split(':').filter(Boolean) },
 });
 if (env.INKLING_CODING_IMPORTS_FILE) {
   const imports = JSON.parse(fs.readFileSync(env.INKLING_CODING_IMPORTS_FILE, 'utf8'));

@@ -1238,7 +1238,7 @@ async function runTool(
       case "coding_projects": case "coding_start": case "coding_status": case "coding_diff": case "coding_continue": case "coding_cancel": case "coding_artifacts": {
         if (chat.group || !chat.user.owner || isGuest(chat.user) || !codingEnabled()) return output("Error: Coding is available only to the owner in private chat when configured.");
         if (call.name === "coding_cancel" && !/\b(stop|cancel|abort|band|rok|roko)\b/i.test(said)) return output("Error: Only cancel coding when the owner asks to stop it.");
-        const result = await controlCoding(call.name, args, chat.user.id, musicRequestKey || `${chat.id}:${turnStart}:${said}`, (data, filename) => actions.sendDocument(data, filename));
+        const result = await controlCoding(call.name, args, chat.user.id, musicRequestKey || `${chat.id}:${turnStart}:${said}`, (data, filename) => actions.sendDocument(data, filename), said);
         did.push(call.name === "coding_artifacts" ? "sent requested coding source archive" : `coding ${call.name.slice(7)} requested`);
         return output(result);
       }

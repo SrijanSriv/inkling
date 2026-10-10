@@ -21,6 +21,29 @@ export const SCOPE = {
 const REDIRECT_PATH = "/oauth/google/callback";
 const LINK_TTL_MS = 10 * 60_000;
 
+/** Request only the services this deployment uses; existing deployments keep all services. */
+export function googleSignInScopes(): string[] {
+  const selected = process.env.INKLING_GOOGLE_SERVICES;
+  if (selected === undefined) return Object.values(SCOPE);
+  const scopes: Record<string, string[]> = {
+    gmail: [SCOPE.gmailRead, SCOPE.gmailCompose],
+    calendar: [SCOPE.calendar],
+    drive: [SCOPE.driveRead, SCOPE.driveFile],
+    docs: [SCOPE.docs],
+    sheets: [SCOPE.sheets],
+    tasks: [SCOPE.tasks],
+  };
+  const names = [...new Set(selected.split(",").map((s) => s.trim()).filter(Boolean))];
+  if (!names.length || names.some((name) => !Object.hasOwn(scopes, name))) {
+    throw new Error("INKLING_GOOGLE_SERVICES must list gmail, calendar, drive, docs, sheets or tasks.");
+  }
+  // The callback identifies the account through one of these APIs.
+  if (!names.some((name) => ["gmail", "calendar", "drive"].includes(name))) {
+    throw new Error("INKLING_GOOGLE_SERVICES must include gmail, calendar or drive to identify the account.");
+  }
+  return names.flatMap((name) => scopes[name]);
+}
+
 type Connection = { email: string; refreshToken: string; scopes: string[]; connectedAt: string };
 
 const clientId = () => process.env.GOOGLE_CLIENT_ID ?? "";
@@ -109,7 +132,7 @@ export function googleConnectLink(user: User, chatJid: string): string {
     client_id: clientId(),
     redirect_uri: redirectUri(),
     response_type: "code",
-    scope: Object.values(SCOPE).join(" "),
+    scope: googleSignInScopes().join(" "),
     access_type: "offline",
     prompt: "consent",
     state,

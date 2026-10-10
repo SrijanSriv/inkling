@@ -7,7 +7,9 @@ Implementation uses dependency-free JavaScript worker modules, sanitized revisio
 worktrees, source `.tar.gz` delivery, and optional static previews. Separate Codex processes per project are necessary
 because standalone verification inherits the app-server's initial workspace permissions. Up to three project sessions
 are retained; eviction preserves files and sealed task context, and the next continuation starts a new thread.
-Dependency installation, backend preview servers and public publishing remain outside this release.
+Public GitHub source imports now run in a bounded preparation step before the sandbox starts. Built-in hosted web
+search is enabled independently of offline project commands. Dependency installation, backend preview servers and
+public publishing remain outside this release.
 
 ## What the owner can do
 
