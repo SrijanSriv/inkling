@@ -575,3 +575,10 @@ previews use `INKLING_CODING_PREVIEW_URL`, `INKLING_CODING_PREVIEW_HOST`, and po
 hour and is revoked when work continues or is cancelled. Preview links are for home Wi-Fi only; the separate preview
 listener exposes no job API. External resources, network requests and form submissions are blocked by its content
 policy. Backend servers and automatic browser testing are outside this initial preview implementation.
+
+### Optional nightly operations
+
+[The host operations guide](docs/operations.md) describes encrypted Pi-to-laptop recovery backups, private aggregate
+runtime diagnostics, an isolated nightly Codex review that proposes GitHub PRs, owner-only WhatsApp notifications,
+and checked deployment of the reviewed default branch with rollback. These jobs need explicit host installation and
+private configuration; they are not enabled by cloning the repository or starting Inkling.

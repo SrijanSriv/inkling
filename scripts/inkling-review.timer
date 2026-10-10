@@ -1,0 +1,9 @@
+[Unit]
+Description=Process nightly Inkling diagnostics when the laptop is available
+
+[Timer]
+OnBootSec=7min
+OnUnitInactiveSec=5min
+
+[Install]
+WantedBy=timers.target

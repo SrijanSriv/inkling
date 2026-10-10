@@ -1,0 +1,18 @@
+{
+  "role": "laptop",
+  "repository": "owner/repository",
+  "branch": "master",
+  "checkout": "/path/to/maintenance-clone",
+  "state": "/path/to/private/operations-state",
+  "node": "/path/to/node",
+  "tool_path": "/path/to/node/bin:/usr/local/bin:/usr/bin:/bin",
+  "codex_bin": "/path/to/pinned/codex",
+  "codex_version": "0.162.1",
+  "codex_auth": "/path/to/private/codex/auth.json",
+  "tool_roots": ["/path/to/approved/node-tools"],
+  "gh": "/path/to/gh",
+  "github_token": "/path/to/private/repository-scoped-token",
+  "restic": "/path/to/restic",
+  "backup_repository": "/path/to/private/operations-state/backups",
+  "backup_password": "/path/to/private/restic-password"
+}

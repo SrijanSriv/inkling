@@ -1,0 +1,13 @@
+[Unit]
+Description=Inkling encrypted nightly backup and laptop transfer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 %h/.local/lib/inkling-ops/ops/nightly.py
+TimeoutStartSec=45min
+UMask=0077
+Nice=10
+CPUQuota=75%
+MemoryMax=600M

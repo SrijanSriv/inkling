@@ -1,0 +1,19 @@
+{
+  "role": "pi",
+  "checkout": "/path/to/inkling",
+  "data": "/path/to/inkling/data",
+  "state": "/path/to/private/operations-state",
+  "releases": "/path/to/private/releases",
+  "branch": "master",
+  "timezone": "Asia/Kolkata",
+  "service": "inkling.service",
+  "music_service": "inkling-music.service",
+  "health_url": "http://127.0.0.1:8787/health",
+  "node": "/path/to/node",
+  "tool_path": "/path/to/node/bin:/usr/local/bin:/usr/bin:/bin",
+  "restic": "/path/to/restic",
+  "backup_repository": "/path/to/private/operations-state/backups",
+  "backup_password": "/path/to/private/restic-password",
+  "laptop_ssh": "user@backup-host",
+  "laptop_state": "/path/to/private/laptop-operations-state"
+}

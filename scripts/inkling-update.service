@@ -1,0 +1,13 @@
+[Unit]
+Description=Inkling checked deployment of the reviewed default branch
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 %h/.local/lib/inkling-ops/ops/deploy.py
+TimeoutStartSec=45min
+UMask=0077
+Nice=10
+CPUQuota=75%
+MemoryMax=800M

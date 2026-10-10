@@ -1,0 +1,12 @@
+[Unit]
+Description=Inkling backup at local midnight, with offline transfer retries
+
+[Timer]
+OnCalendar=*-*-* 00:00:00 Asia/Kolkata
+OnBootSec=5min
+OnUnitActiveSec=15min
+Persistent=true
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

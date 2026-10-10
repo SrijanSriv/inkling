@@ -7,3 +7,5 @@ data/
 version.json
 .inkling/
 browser/node_modules/
+__pycache__/
+*.pyc

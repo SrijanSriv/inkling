@@ -1,0 +1,13 @@
+[Unit]
+Description=Inkling nightly diagnostic review and proposed pull request
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 %h/.local/lib/inkling-ops/ops/review.py
+TimeoutStartSec=40min
+UMask=0077
+Nice=10
+CPUQuota=100%
+MemoryMax=700M

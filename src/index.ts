@@ -12,6 +12,7 @@ import { clearHistory, encryptStoredChats, groupOpen, loadMemory, setGroupOpen }
 import { bubbles } from "./text.js";
 import { adminLink, startWeb } from "./web.js";
 import { botPhone, groupInfo, link, markRead, releaseWhatsApp, nameCall, react, resendMedia, sendImage, sendDocument, sendPoll, sendText, sendVoiceNote, setPersonLookup, showTyping, startWhatsApp, type InboundMessage } from "./whatsapp.js";
+import { startOperationNotifications } from "./operations.js";
 import { speak } from "./voice.js";
 import { startScheduler, type RunJob } from "./schedule.js";
 import { startChanges } from "./changes.js";
@@ -430,6 +431,7 @@ startMemoryUpkeep();
 // Self-changes report to the owner in their private chat.
 const owner = getUsers().find((u) => u.owner);
 if (owner) startCodingNotifications(owner.id, notifyPerson(owner), () => link.connected);
+if (owner) startOperationNotifications(owner.id, notifyPerson(owner), () => link.connected);
 if (owner) startChanges((text) => notifyPerson(owner)(text), owner.id, () => link.connected);
 startReminders(
   async (chatJid, text, urgent) => {

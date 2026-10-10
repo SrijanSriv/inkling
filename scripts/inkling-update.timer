@@ -1,0 +1,9 @@
+[Unit]
+Description=Check the reviewed Inkling default branch every five minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitInactiveSec=5min
+
+[Install]
+WantedBy=timers.target
