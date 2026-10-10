@@ -62,7 +62,8 @@ function show(l: { name: string; items: Item[] }): string {
 }
 
 export function handleList(name: string, args: Record<string, unknown>, chatId: string, by: string): string {
-  const lists = readSealedJson<Lists>(file(chatId), {});
+  // List names are arbitrary strings, including Object.prototype property names.
+  const lists: Lists = Object.assign(Object.create(null), readSealedJson<Lists>(file(chatId), {}));
   const k = typeof args.list === "string" ? key(args.list) : "";
   switch (name) {
     case "list_add": {
