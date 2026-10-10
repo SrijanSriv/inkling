@@ -1,0 +1,18 @@
+[Unit]
+Description=Inkling signed GitHub update receiver (loopback only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 %h/.local/lib/inkling-ops/ops/webhook.py
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+MemoryMax=96M
+CPUQuota=20%
+
+[Install]
+WantedBy=default.target

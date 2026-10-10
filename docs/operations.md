@@ -46,6 +46,38 @@ usage allowance. GitHub Pages is unrelated to these private backups.
   This updater deploys the Pi assistant and its music service. Separately installed laptop browser/coding services
   and trusted maintenance wrappers need manual installation after review; a merge does not update those services.
 
+## Immediate updates with a GitHub webhook
+
+The optional `inkling-webhook.service` runs a separate Python receiver on loopback (default port 8789).
+Expose only this receiver with a persistent HTTPS tunnel such as Tailscale Funnel, never the assistant, browser,
+coding worker or a data directory. Funnel requires its account-level HTTPS/Funnel setup; `tailscale funnel --bg
+http://127.0.0.1:8789` persists across reboots. Its public URL plus `/github` is the webhook endpoint.
+
+Add `webhook_repository_id` (GitHub's numeric repository ID), `webhook_secret` (a private file containing a random
+signing secret of at least 32 bytes) and optional `webhook_port` to the Pi's private operations configuration.
+Install the current `ops/` trusted wrappers, including `webhook_queue.py`, then install and enable the receiver's
+user service. Register a repository webhook for **push** events, JSON content, SSL verification enabled and the
+same secret. Do not put secrets or deployment URLs in source. The publisher's Contents/PR token deliberately
+does not have webhook-administration access; creating the webhook needs a repository administrator once.
+
+The receiver checks `X-Hub-Signature-256` against the raw body, the repository ID, the configured branch and a
+non-deletion push. Invalid signatures fail closed. It persists a bounded delivery-ID ledger and coalesced queue
+before returning, without retaining payloads, commit messages or request headers. Retries of a delivery are
+deduplicated. A background dispatcher wakes the existing checked updater; the request cannot supply a command,
+repository URL or deployment revision. Git is still fetched from the configured origin. Updates received while
+backup/deployment is busy stay queued, and a push received during deployment causes another fetch afterward.
+
+Verify a GitHub ping and an actual default-branch push, then install
+`scripts/inkling-update.timer.d/webhook.conf` as a user-timer drop-in and reload systemd. This changes the fallback
+from five minutes to **hourly**, retaining a boot check. Keep five-minute polling until the webhook works.
+The hourly/boot check catches changes missed while the Pi or tunnel was offline. GitHub delivery failures can be
+inspected and redelivered in repository webhook settings. `webhook-queue.json` records only delivery IDs and times;
+an empty `pending` field means the updater handled the latest queued hint, including deliberately paused updates.
+Backups and checked deployment/rollback are unchanged.
+
+To disable immediate updates, disable `inkling-webhook.service`, remove its tunnel mapping and deactivate the
+GitHub webhook. Remove the timer drop-in and reload/restart the timer to restore five-minute polling.
+
 ## Installation
 
 Requirements: Python 3.12+, SSH/rsync, Restic, Node/npm, systemd user services with lingering enabled; the laptop also

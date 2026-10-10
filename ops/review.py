@@ -37,7 +37,7 @@ def changed_files(work):
             raise RuntimeError('Invalid review path')
         if p.parts[0] in {'.github','ops','.git','.codex','.agents','data','node_modules','.tmp','.inkling'} or p.name in {'AGENTS.md','CLAUDE.md'} or p.name.startswith('.env'):
             raise RuntimeError('Protected review path')
-        if name.startswith(('scripts/inkling-nightly.', 'scripts/inkling-update.', 'scripts/inkling-review.')):
+        if name.startswith(('scripts/inkling-nightly.', 'scripts/inkling-update.', 'scripts/inkling-review.', 'scripts/inkling-webhook.')):
             raise RuntimeError('Protected maintenance service')
         dest = work/p
         if dest.is_symlink() or any((work/Path(*p.parts[:i])).is_symlink() for i in range(1,len(p.parts))):

@@ -11,6 +11,7 @@ import time
 import urllib.request
 from common import atomic, entrypoint, lock, notify, read, run
 from nightly import snapshot
+from webhook_queue import delivery_checkpoint
 
 
 def point(link, target):
@@ -36,7 +37,7 @@ def healthy(c, sha, seconds=120):
 
 def main(c):
     state, root = Path(c['state']), Path(c['checkout'])
-    with lock(state/'maintenance.lock'):
+    with lock(state/'maintenance.lock'), delivery_checkpoint(c):
         dirty = run(['git','status','--porcelain'],cwd=root).stdout.strip()
         if dirty:
             notify(c,'update-dirty','Automatic update paused because the Pi source has local edits. They have been preserved; reconcile them before deploying GitHub changes.')
