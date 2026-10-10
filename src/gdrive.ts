@@ -1,5 +1,5 @@
 import type OpenAI from "openai";
-import { GoogleDisconnected, googleAccounts, googleApi, googleText, type GoogleAccount } from "./google.js";
+import { GoogleDisconnected, googleAccounts, googleApi, googleConnectEnabled, googleText, type GoogleAccount } from "./google.js";
 
 // Google Drive, Docs, Sheets, Slides and Tasks, in private chats only. Reading covers all their files (Drive
 // read-only); writing covers Docs, Sheets and Tasks, plus files the assistant creates. Nothing is shared with anyone else.
@@ -76,7 +76,7 @@ export async function callWorkspaceTool(userId: string, name: string, args: Reco
   const accounts = googleAccounts(userId).filter((a) => a[flag]).map((a) => a.email);
   const wanted = typeof args.account === "string" ? args.account.trim().toLowerCase() : "";
   const chosen = wanted ? accounts.filter((e) => e.toLowerCase() === wanted) : accounts;
-  if (!chosen.length) return wanted ? `${args.account} isn't connected for that. Connected: ${accounts.join(", ") || "none"}.` : "Not connected. They can send /connect google.";
+  if (!chosen.length) return wanted ? `${args.account} isn't connected for that. Connected: ${accounts.join(", ") || "none"}.` : googleConnectEnabled() ? "Not connected. They can send /connect google." : "Not connected. Google account linking is disabled.";
   const api = (email: string, url: string, init?: RequestInit) => googleApi(userId, email, url, init) as Promise<any>;
   // A file or task belongs to one account, so try each until one has it.
   const firstThatWorks = async (fn: (email: string) => Promise<string>): Promise<string> => {
@@ -177,7 +177,7 @@ export async function callWorkspaceTool(userId: string, name: string, args: Reco
     }
     throw new Error(`Unknown tool: ${name}`);
   } catch (err) {
-    if (err instanceof GoogleDisconnected) throw new Error(`${err.message} They can send /connect google to reconnect.`);
+    if (err instanceof GoogleDisconnected) throw new Error(`${err.message} ${googleConnectEnabled() ? "They can send /connect google to reconnect." : "Account linking is disabled; the owner needs to re-enable it before reconnecting. Do not send a sign-in link."}`);
     throw err;
   }
 }

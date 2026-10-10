@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type OpenAI from "openai";
 import { config, type User } from "./config.js";
-import { GoogleDisconnected, googleAccounts, googleApi } from "./google.js";
+import { GoogleDisconnected, googleAccounts, googleApi, googleConnectEnabled } from "./google.js";
 import { zonedToUtc } from "./time.js";
 
 // Google Calendar tools. In private chats people see their own events. In a group, inkling only ever
@@ -190,7 +190,7 @@ export async function callCalendarTool(
 ): Promise<string> {
   const connected = (members ?? [asker]).filter((u) => calendars(u).length);
   const missing = (members ?? [asker]).filter((u) => !calendars(u).length).map((u) => u.name);
-  const notConnected = missing.length ? `\nNot connected (they can send /connect google in a private chat with you): ${missing.join(", ")}.` : "";
+  const notConnected = missing.length ? `\nNot connected${googleConnectEnabled() ? " (they can send /connect google in a private chat with you)" : " (account linking is disabled)"}: ${missing.join(", ")}.` : "";
   try {
     switch (name) {
       case "calendar_upcoming": {
@@ -239,7 +239,7 @@ export async function callCalendarTool(
             body: JSON.stringify({ ...event, attendees: invitees.map((g) => ({ email: g.email, displayName: g.name })), guestsCanSeeOtherGuests: false }),
           })) as GEvent;
           const invited = invitees.length ? ` and invited ${invitees.map((g) => g.name).join(", ")} (Google sent each of them an invite)` : "";
-          const left = missing.length ? `\nNot invited, since they haven't connected Google: ${missing.join(", ")}. They can send /connect google in a private chat with you, or post their email here to be invited.` : "";
+          const left = missing.length ? `\nNot invited, since they haven't connected Google: ${missing.join(", ")}. ${googleConnectEnabled() ? "They can send /connect google in a private chat with you, or post their email here to be invited." : "They can post their email here to be invited; Google account linking is disabled."}` : "";
           return `added to ${asker.name}'s calendar (event ${made.id})${invited}.${left}`;
         }
         const targets = members && args.who === "everyone" ? connected : connected.filter((u) => u.id === asker.id);
@@ -335,7 +335,7 @@ export async function callCalendarTool(
     }
     throw new Error(`Unknown calendar tool: ${name}`);
   } catch (err) {
-    if (err instanceof GoogleDisconnected) throw new Error(`${err.message} They can send /connect google to reconnect.`);
+    if (err instanceof GoogleDisconnected) throw new Error(`${err.message} ${googleConnectEnabled() ? "They can send /connect google to reconnect." : "Account linking is disabled; the owner needs to re-enable it before reconnecting. Do not send a sign-in link."}`);
     throw err;
   }
 }

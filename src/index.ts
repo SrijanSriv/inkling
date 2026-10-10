@@ -1,7 +1,7 @@
 import { startCodingNotifications } from "./coding.js";
 import { config, findUserByPhone, getUsers, phonesOf, type User } from "./config.js";
 import { respond, type Chat, type ChatActions, type Incoming } from "./agent.js";
-import { disconnectGoogle, googleAccounts, googleConfigured, googleConnectLink, serviceNames } from "./google.js";
+import { disconnectGoogle, googleAccounts, googleConfigured, googleConnectEnabled, googleConnectLink, serviceNames } from "./google.js";
 import { guestMessage, isGuest } from "./guests.js";
 import { keepAlive, keepPending, startedPending, takePending, waitForHandover } from "./handoff.js";
 import { log } from "./log.js";
@@ -327,7 +327,7 @@ async function runCommand(chat: Chat, chatJid: string, command: string): Promise
         ? `Mention me (@${config.name}), reply to one of my messages, or start with "${config.name.toLowerCase()}" and I'll jump in.\n/memory: what I remember for this group\n/reset: start fresh here`
         : [
             "Just text me like you'd text a friend. A few commands:",
-            "/connect google: link Gmail, Calendar, Drive and Tasks (you can add several accounts)",
+            ...(googleConnectEnabled() ? ["/connect google: link Gmail, Calendar, Drive and Tasks (you can add several accounts)"] : []),
             "/google: see which accounts are connected",
             "/disconnect google: remove my access (add an email to remove just one)",
             "/memory: see what I remember about you",
@@ -343,9 +343,10 @@ async function runCommand(chat: Chat, chatJid: string, command: string): Promise
     case "/connect google":
     case "/connect gmail":
     case "/connect calendar":
+      if (!googleConfigured()) return "Google isn't set up yet.";
+      if (!googleConnectEnabled()) return "Google account linking is disabled. Existing connected accounts still work.";
       if (group) return "Message me privately for that, so your sign-in link stays with you.";
       if (isGuest(user)) return `Google is for people on the list for now: someone who uses ${config.name} can add you. Or run your own ${config.name}, free and open source: ${config.sourceUrl}`;
-      if (!googleConfigured()) return "Google isn't set up yet.";
       await sendGoogleLink(user, chatJid);
       return "";
     case "/link whatsapp":
@@ -373,8 +374,8 @@ async function runCommand(chat: Chat, chatJid: string, command: string): Promise
     case "/google": {
       const list = googleAccounts(user.id);
       return list.length
-        ? `Connected:\n${list.map((a) => `- ${a.email} (${serviceNames(a)})`).join("\n")}\n\n/connect google adds another. /disconnect google <email> removes one.`
-        : "No Google accounts connected. Send /connect google to add one.";
+        ? `Connected:\n${list.map((a) => `- ${a.email} (${serviceNames(a)})`).join("\n")}\n\n${googleConnectEnabled() ? "/connect google adds another. " : ""}/disconnect google <email> removes one.`
+        : googleConnectEnabled() ? "No Google accounts connected. Send /connect google to add one." : "No Google accounts connected. Account linking is disabled.";
     }
   }
   // "/disconnect google someone@example.com" removes just that account.

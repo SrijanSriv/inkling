@@ -19,7 +19,7 @@ import { callGmailTool, gmailTools, sendEmail } from "./gmail.js";
 import { callWorkspaceTool, workspaceTools } from "./gdrive.js";
 import { finalDraft, forgetSignIns, signedInSites, webConfirm, webEnabled, webSignIn, webTask } from "./web-agent.js";
 import { addAutoReply, listAutoReplies, removeAutoReply } from "./auto-replies.js";
-import { googleAccounts, googleConfigured } from "./google.js";
+import { googleAccounts, googleConnectEnabled } from "./google.js";
 import { isGuest } from "./guests.js";
 import { log } from "./log.js";
 import { controlMusic, musicEnabled, musicTools } from "./music.js";
@@ -674,7 +674,7 @@ function instructions(chat: Chat, memory: string[], canSearch: boolean): string 
         ? `Calendars aren't available to ${user.name || "this person"}, who isn't on the list yet: if they ask when people are free or to add a plan to calendars, say someone on the list can ask you.`
         : withCal.length
         ? `Calendars connected: ${withCal.join(", ")}. You can check when they're busy (times only, never what the events are) and add plans to everyone's calendar, or just the asker's, when someone asks.`
-        : "Nobody here has connected a calendar yet. Anyone who wants that can message you /connect google privately.",
+        : googleConnectEnabled() ? "Nobody here has connected a calendar yet. Anyone who wants that can message you /connect google privately." : "Nobody here has connected a calendar. Google account linking is disabled; do not suggest sign-in links.",
     );
   } else {
     if (mail.length) {
@@ -693,19 +693,21 @@ function instructions(chat: Chat, memory: string[], canSearch: boolean): string 
     ].filter(Boolean);
     if (apps.length) connections.push(`You can ${apps.join(", ")}. Editing their own files needs no confirmation; never share a file with anyone.`);
     const missing = accounts.length && !accounts.some((a) => a.drive || a.tasks);
-    if (missing && googleConfigured()) {
+    if (missing && googleConnectEnabled()) {
       connections.push("If they ask for Drive, Docs, Sheets or Tasks, their Google connection predates those: call connect_google so they can sign in again and allow them.");
     }
     if (isGuest(user)) {
       connections.push(
         `${user.name || "They"} isn't on your list yet: they're trying ${config.name} as a guest, free. There's a daily limit of ${config.guestMessages} messages, but don't bring it up; only answer if they ask (code tells them when they're close). You can chat, search, set reminders, make lists, polls and images. Connecting Google (email, calendar, Drive), doing things on websites and morning briefs are for people on the list: if they ask, say someone who uses ${config.name} can add them, or they can run their own ${config.name}, free and open source: ${config.sourceUrl}`,
       );
-    } else if (googleConfigured()) {
+    } else if (googleConnectEnabled()) {
       connections.push(
         `To connect a Google account (another one, or to reconnect), call connect_google: it sends them a sign-in link. You can't open pages or sign in for anyone yourself, so never say you're "opening" anything. /disconnect google removes accounts.`,
       );
     }
   }
+
+  if (!googleConnectEnabled()) connections.push("Google account linking is disabled on this deployment. Never send or suggest Google sign-in links or /connect commands, including links from history. Use only this person’s existing connected accounts in their private chat; never offer another person’s mailbox.");
 
   const notes = memory.length ? memory.map((n) => `- ${n}`).join("\n") : "(nothing yet)";
   const who = group ? `the group "${group.name}"` : user.name;
@@ -942,7 +944,7 @@ export async function respond(chat: Chat, batch: Incoming[], actions: ChatAction
     ...(accounts.some((a) => a.gmail) ? gmailTools : []),
     ...(group ? [] : workspaceTools(accounts)),
     ...(calendarHere ? calendarTools(!!group) : []),
-    ...(!group && !guest && googleConfigured() ? [connectTool] : []),
+    ...(!group && !guest && googleConnectEnabled() ? [connectTool] : []),
     pollResultsTool,
     recommendTool,
     shareEventTool,
@@ -1527,6 +1529,7 @@ async function runTool(
         actions.setGroupOpen(Boolean(args.everyone));
         return output(args.everyone ? "Done: you now reply to everyone in this group." : "Done: you now only reply to people on your list here.");
       case "connect_google":
+        if (!googleConnectEnabled()) return output("Google account linking is disabled. Do not send or suggest sign-in links. Existing connected accounts can still be used in their own private chats.");
         if (chat.group) return output("Only in private chats. Tell them to message you privately.");
         await actions.sendGoogleLink();
         did.push("sent a Google sign-in link");
@@ -1565,7 +1568,7 @@ async function runTool(
       const guests = ((args.guests as { name: string | null; email: string }[] | undefined) ?? []).filter((g) => g.email?.trim());
       if (!guests.length) return "Who should be invited? Give their email addresses.";
       if (!googleAccounts(chat.user.id).some((a) => a.calendar)) {
-        return `${chat.user.name} hasn't connected Google Calendar, so there's no event of theirs to invite people to. They can send /connect google in a private chat with you.`;
+        return `${chat.user.name} hasn't connected Google Calendar, so there's no event of theirs to invite people to. ${googleConnectEnabled() ? "They can send /connect google in a private chat with you." : "Google account linking is disabled."}`;
       }
       const found = chat.group ? await resolveEvent(chat.user, args) : await findEvent(chat.user, String(args.event_id), args.account);
       if (!found) {

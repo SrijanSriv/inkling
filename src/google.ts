@@ -44,6 +44,9 @@ export function googleSignInScopes(): string[] {
   return names.flatMap((name) => scopes[name]);
 }
 
+/** Disable onboarding without disconnecting existing accounts or their token refresh. */
+export const googleConnectEnabled = () => googleConfigured() && process.env.INKLING_GOOGLE_CONNECT_ENABLED !== "false";
+
 type Connection = { email: string; refreshToken: string; scopes: string[]; connectedAt: string };
 
 const clientId = () => process.env.GOOGLE_CLIENT_ID ?? "";
@@ -125,6 +128,7 @@ const pending = new Map<string, { userId: string; chatJid: string; verifier: str
  * /connect page (so WhatsApp shows a proper preview card), which forwards to Google.
  */
 export function googleConnectLink(user: User, chatJid: string): string {
+  if (!googleConnectEnabled()) throw new Error("Google account linking is disabled on this deployment.");
   for (const [state, p] of pending) if (p.expires < Date.now()) pending.delete(state);
   const state = randomToken();
   const verifier = randomToken();

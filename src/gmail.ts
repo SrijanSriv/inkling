@@ -1,5 +1,5 @@
 import type OpenAI from "openai";
-import { GoogleDisconnected, googleAccounts, googleApi } from "./google.js";
+import { GoogleDisconnected, googleAccounts, googleApi, googleConnectEnabled } from "./google.js";
 import { htmlToText } from "./text.js";
 
 // Gmail tools. Access is read + compose. The model can search, read and save drafts. Sending (sendEmail) is only
@@ -289,7 +289,7 @@ export async function callGmailTool(userId: string, name: string, input: Record<
     }
   } catch (err) {
     if (err instanceof GoogleDisconnected) {
-      throw new Error(`${err.message} Tell the user to send /connect google to connect it again.`);
+      throw new Error(`${err.message} ${googleConnectEnabled() ? "Tell the user to send /connect google to connect it again." : "Account linking is disabled; the owner needs to re-enable it before reconnecting. Do not send a sign-in link."}`);
     }
     throw err;
   }
