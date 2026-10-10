@@ -40,7 +40,7 @@ async function browser<T = any>(endpoint: string, init?: { method?: string; body
     headers: { authorization: `Bearer ${config.browserSecret}`, "content-type": "application/json" },
     body: init?.body ? JSON.stringify(init.body) : undefined,
     signal: AbortSignal.timeout(90_000),
-  });
+  }).catch(() => { throw new Error("The browser laptop is unreachable right now. No result was verified; try again once it is awake and connected."); });
   const data = (await res.json().catch(() => ({}))) as T & { error?: string };
   if (!res.ok) throw new Error(data.error ?? `browser ${res.status}`);
   return data;
@@ -50,6 +50,7 @@ async function browser<T = any>(endpoint: string, init?: { method?: string; body
 const stateFile = (userId: string) => path.join(config.dataDir, "users", userId, "web.json");
 
 async function saveState(task: Task): Promise<void> {
+  if (task.publicOnly) return;
   const { state } = await browser<{ state: unknown }>(`/sessions/${task.session}/state`);
   writeSealedJson(stateFile(task.userId), state);
 }
@@ -81,6 +82,8 @@ export function forgetSignIns(userId: string): void {
 // ---- one task per person, remembered between messages ----
 
 type Task = {
+  key: string;
+  publicOnly: boolean;
   userId: string;
   session: string;
   goal: string;
@@ -93,12 +96,13 @@ type Task = {
 };
 const tasks = new Map<string, Task>();
 
-async function openTask(user: User, goal: string): Promise<Task> {
-  const old = tasks.get(user.id);
+async function openTask(user: User, goal: string, groupId?: string): Promise<Task> {
+  const key = groupId ? `public:${groupId}` : user.id;
+  const old = tasks.get(key);
   if (old) await browser(`/sessions/${old.session}`, { method: "DELETE" }).catch(() => {});
-  const { id } = await browser<{ id: string }>("/sessions", { body: { state: readSealedJson<object>(stateFile(user.id), {}) } });
-  const task: Task = { userId: user.id, session: id, goal, input: [], updated: Date.now() };
-  tasks.set(user.id, task);
+  const { id } = await browser<{ id: string }>("/sessions", { body: { state: groupId ? undefined : readSealedJson<object>(stateFile(user.id), {}) } });
+  const task: Task = { key, publicOnly: !!groupId, userId: user.id, session: id, goal, input: [], updated: Date.now() };
+  tasks.set(key, task);
   return task;
 }
 
@@ -149,12 +153,15 @@ const tools: OpenAI.Responses.FunctionTool[] = [
       currency: { type: ["string", "null"], description: 'e.g. "GBP".' },
     },
   ),
-  fn("finish", "Stop and report: what you did or found, or why you couldn't. Include any link they need.", { report: { type: "string" } }),
+  fn("finish", "Stop with a short, natural report in their language: what you found or why you couldn't. Include source links.", {
+    report: { type: "string" },
+    screenshot: { type: "boolean", description: "True only if they asked you to send a screenshot of the page." },
+  }),
 ];
 
-function instructions(user: User, goal: string): string {
-  const emails = googleAccounts(user.id).map((a) => a.email);
-  const notes = loadMemory(user.id);
+function instructions(user: User, goal: string, publicOnly = false): string {
+  const emails = publicOnly ? [] : googleAccounts(user.id).map((a) => a.email);
+  const notes = publicOnly ? [] : loadMemory(user.id);
   return `You are ${config.name}'s hands on the web. You control a real browser (Chrome, phone-sized) for ${user.name}, who asked:
 "${goal}"
 
@@ -166,14 +173,18 @@ Rules, which are enforced:
   sign-in pages are fine).
 - Never type passwords, card numbers or security codes, and never try to get past a CAPTCHA or a security check
   ("verify you are human", Cloudflare, "press and hold"). For sign-in, those checks, codes or anything only
-  ${user.name} can do, call need_person: they'll do it in this same browser, then you carry on.
+  ${user.name} can do, ${publicOnly ? "call finish and explain that personal sign-ins and takeover are only available in private chat." : "call need_person: they'll do it in this same browser, then you carry on."}
 - Never click the final button (pay, buy, place order, book, reserve, submit, send). When everything is filled in and
-  checked, call propose_final with that button's ref, an exact summary and the total shown.
+  checked, ${publicOnly ? "call finish with what you found. Group browsing cannot complete submissions." : "call propose_final with that button's ref, an exact summary and the total shown."}
 - Fill forms with the details below. Never invent details; if something's missing or a choice is theirs to make,
   call finish and say what you need.
+- For research, site searches, comparisons and reading, do not change accounts or submit forms except search forms.
+  Report the useful findings in natural language with the exact source URLs you visited. Separate what the page says
+  from your inference. Never invent prices, availability, successful actions or facts when a page failed to load.
+- Do not download files, upload files or play media. This browser is on a remote machine, not their phone or speaker.
 - Be quick: no wandering. If it isn't working after a few tries, call finish and say what happened.
 
-${user.name}'s details: email ${emails[0] ?? "(not known)"}${user.phone ? `, phone +${user.phone}` : ""}${user.city ? `, based in ${user.city}` : ""}${user.postcode ? ` (${user.postcode})` : ""}.
+${publicOnly ? "This is public research for a group. Use public pages, search and filters only. No sign-ins, live takeover links, purchases, bookings, account changes or submissions. If a site requires login or a CAPTCHA, report the limitation. No personal details or private memory are available." : `${user.name}'s details: email ${emails[0] ?? "(not known)"}${user.phone ? `, phone +${user.phone}` : ""}${user.city ? `, based in ${user.city}` : ""}${user.postcode ? ` (${user.postcode})` : ""}.`}
 ${notes.length ? `Notes they've asked ${config.name} to remember:\n${notes.map((n) => `- ${n}`).join("\n")}` : ""}`;
 }
 
@@ -185,7 +196,7 @@ function describe(page: Snapshot): string {
 }
 
 export type WebResult =
-  | { kind: "finished"; report: string }
+  | { kind: "finished"; report: string; screenshot?: Buffer }
   | { kind: "need_person"; reason: string; link: string }
   | { kind: "final"; summary: string; total?: number; currency?: string; screenshot: Buffer; url: string; overLimit?: string }
   | { kind: "paused"; progress: string };
@@ -199,33 +210,41 @@ async function screenshot(task: Task): Promise<Buffer> {
 async function run(user: User, task: Task, message: string): Promise<WebResult> {
   task.input.push({ role: "user", content: [{ type: "input_text", text: task.page ? `${message}\n\nCurrent page:\n${describe(task.page)}` : message }] });
   const started = Date.now();
-  const turn = startTurn(user.id, user.id, false);
+  const turn = startTurn(user.id, task.key, task.publicOnly);
+  const offered = task.publicOnly ? tools.filter(t => !["need_person", "propose_final"].includes(t.name)) : tools;
   for (let step = 0; step < MAX_STEPS && Date.now() - started < MAX_MS; step++) {
     const response = await generation(turn, "web", config.webModel, () => responses().create({
       model: config.webModel,
-      instructions: instructions(user, task.goal),
+      instructions: instructions(user, task.goal, task.publicOnly),
       input: task.input,
-      tools,
+      tools: offered,
       tool_choice: "required",
       store: false,
       ...tuned("low", { carry: true }),
     }));
     task.input.push(...(response.output as Input[]));
     const calls = response.output.filter((o): o is OpenAI.Responses.ResponseFunctionToolCall => o.type === "function_call");
-    if (!calls.length) return { kind: "finished", report: response.output_text || "Done." };
+    if (!calls.length) {
+      task.input.push({ role: "user", content: "Use finish with a report grounded in pages you actually opened, or use a browser tool to continue. Do not claim success without checking the page." });
+      continue;
+    }
     for (const call of calls) {
       const args = JSON.parse(call.arguments || "{}") as Record<string, any>;
       const reply = (text: string) => task.input.push({ type: "function_call_output", call_id: call.call_id, output: text });
       try {
+        if (!offered.some(t => t.name === call.name)) { reply("That action is not available in this browser session."); continue; }
         switch (call.name) {
           case "finish":
             reply("ok");
-            return { kind: "finished", report: String(args.report) };
+            if (!task.page || task.page.url === "about:blank") {
+              return { kind: "finished", report: "I couldn't open a page, so I couldn't verify a result for that." };
+            }
+            return { kind: "finished", report: String(args.report), screenshot: args.screenshot ? await screenshot(task) : undefined };
           case "need_person": {
             reply("Handed over; wait.");
             task.waitingForPerson = true;
             const { path: live } = await browser<{ path: string }>(`/sessions/${task.session}/live`, { method: "POST", body: {} });
-            return { kind: "need_person", reason: String(args.reason), link: `${config.browserUrl}${live}` };
+            return { kind: "need_person", reason: String(args.reason), link: `${config.browserLiveUrl}${live}` };
           }
           case "propose_final": {
             const page = (task.page = await browser<Snapshot>(`/sessions/${task.session}/snapshot`));
@@ -274,6 +293,10 @@ async function run(user: User, task: Task, message: string): Promise<WebResult> 
           reply("That looks like a card number. Never type those; call need_person if a card is needed.");
           continue;
         }
+        if (task.publicOnly && call.name === "type" && (!target || !/search|combobox/i.test(`${target.role} ${target.name}`))) {
+          reply("Group browsing can only type into search fields. Use a private chat for personal website tasks.");
+          continue;
+        }
         const page =
           call.name === "open"
             ? await browser<Snapshot>(`/sessions/${task.session}/goto`, { body: { url: String(args.url) } })
@@ -313,16 +336,24 @@ function trim(task: Task): void {
 // ---- what the assistant calls ----
 
 /** Starts a new task, or continues the current one with this message (after a sign-in, or new instructions). */
-export async function webTask(user: User, request: string, fresh: boolean): Promise<WebResult> {
-  let task = fresh ? undefined : await liveTask(user.id);
-  if (!task) task = await openTask(user, request);
+export async function webTask(user: User, request: string, fresh: boolean, groupId?: string): Promise<WebResult> {
+  const key = groupId ? `public:${groupId}` : user.id;
+  let task = fresh ? undefined : await liveTask(key);
+  if (!task) task = await openTask(user, request, groupId);
   task.final = undefined;
   task.waitingForPerson = false;
   task.updated = Date.now();
+  let finished = false;
   try {
-    return await run(user, task, task.input.length ? request : `Start: ${request}`);
+    const result = await run(user, task, task.input.length ? request : `Start: ${request}`);
+    finished = result.kind === "finished";
+    return result;
   } finally {
     await saveState(task).catch((err) => log.warn({ err }, "couldn't save browser sign-ins"));
+    if (finished) {
+      await browser(`/sessions/${task.session}`, { method: "DELETE" }).catch(() => {});
+      tasks.delete(task.key);
+    }
   }
 }
 
@@ -332,7 +363,7 @@ export async function webSignIn(user: User, url: string): Promise<string> {
   await browser(`/sessions/${task.session}/goto`, { body: { url } });
   task.waitingForPerson = true;
   const { path: live } = await browser<{ path: string }>(`/sessions/${task.session}/live`, { method: "POST", body: {} });
-  return `${config.browserUrl}${live}`;
+  return `${config.browserLiveUrl}${live}`;
 }
 
 /** After their yes: clicks the final step it proposed, if the page hasn't changed, then reports back. */
@@ -353,11 +384,16 @@ export async function webConfirm(user: User): Promise<{ report: string; screensh
   }
   task.final = undefined;
   await browser(`/sessions/${task.session}/act`, { body: { kind: "click", ref: item.ref } });
-  log.info({ user: user.id, url: final.url }, "web final step done");
+  log.info("web final step clicked after approval");
   const result = await run(user, task, "They said yes and the final button was clicked. Check what happened (confirmation, order number, errors) and call finish with a short report.");
   await saveState(task).catch(() => {});
-  const report = result.kind === "finished" ? result.report : "It went through; here's the page now.";
-  return { report, screenshot: await screenshot(task).catch(() => undefined) };
+  const report = result.kind === "finished" ? result.report : "I pressed the button you approved, but couldn't verify that it completed. Here's the page now; please check before trying again.";
+  const image = await screenshot(task).catch(() => undefined);
+  if (result.kind === "finished") {
+    await browser(`/sessions/${task.session}`, { method: "DELETE" }).catch(() => {});
+    tasks.delete(user.id);
+  }
+  return { report, screenshot: image };
 }
 
 /** The draft that holds a proposed final step until the person says yes. */

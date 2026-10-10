@@ -50,13 +50,21 @@ export const config = {
   githubToken: process.env.INKLING_GITHUB_TOKEN || undefined,
   // Websites: the assistant's browser service (browser/, deployed separately) and the model that drives it. Off without them.
   browserUrl: (process.env.INKLING_BROWSER_URL ?? "").replace(/\/$/, "") || undefined,
+  // Optional phone-facing address when the API travels through a private SSH tunnel.
+  browserLiveUrl: (process.env.INKLING_BROWSER_LIVE_URL ?? process.env.INKLING_BROWSER_URL ?? "").replace(/\/$/, "") || undefined,
   browserSecret: process.env.INKLING_BROWSER_SECRET || undefined,
+  // General coding jobs run on a separate laptop worker. Owner's private chat only.
+  codingUrl: (process.env.INKLING_CODING_URL ?? "").replace(/\/$/, "") || undefined,
+  codingSecret: process.env.INKLING_CODING_SECRET || undefined,
+  // Native music socket or custom player commands. Off until configured.
+  musicSocket: process.env.INKLING_MUSIC_SOCKET || undefined,
+  musicCommands: process.env.INKLING_MUSIC_COMMANDS || undefined,
   // ElevenLabs voices (voice.ts): spoken replies to voice notes and urgent reminders. Off without a key, and then
   // urgent reminders use the provider's own voice (INKLING_TTS_MODEL) and replies stay as text.
   elevenLabsKey: process.env.INKLING_ELEVENLABS_API_KEY || undefined,
   elevenLabsVoice: process.env.INKLING_ELEVENLABS_VOICE ?? "JBFqnCBsd6RMkjVDRZzb",
   elevenLabsModel: process.env.INKLING_ELEVENLABS_MODEL ?? "eleven_flash_v2_5",
-  webModel: process.env.INKLING_WEB_MODEL ?? (provider === "anthropic" ? "claude-opus-5-5" : "gpt-5.4-mini"),
+  webModel: process.env.INKLING_WEB_MODEL ?? (provider === "compatible" ? process.env.INKLING_MODEL ?? "gpt-5-mini" : provider === "anthropic" ? "claude-opus-5-5" : "gpt-5.4-mini"),
   // Optional analytics (src/analytics.ts, and visit counts on assets/home.html): a PostHog project key. Off when unset.
   posthogKey: process.env.INKLING_POSTHOG_KEY || undefined,
   /** Messages a day a stranger can send in a private chat as a guest (guests.ts). 0, the default, means the waiting list instead. */

@@ -6,7 +6,9 @@
   "scripts": {
     "start": "tsx src/index.ts",
     "dev": "tsx watch src/index.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "music:service": "tsx src/music-daemon.ts",
+    "music": "tsx src/music-cli.ts"
   },
   "type": "module",
   "private": true,

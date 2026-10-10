@@ -1,0 +1,16 @@
+[Unit]
+Description=Inkling coding laptop tunnel
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/inkling-coding-tunnel.env
+ExecStart=/usr/bin/ssh -NT -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=20 -o ServerAliveCountMax=3 -L 127.0.0.1:18100:127.0.0.1:8100 ${INKLING_CODING_SSH_TARGET}
+Restart=always
+RestartSec=5
+UMask=0077
+
+[Install]
+WantedBy=default.target

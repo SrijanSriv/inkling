@@ -1,0 +1,25 @@
+[Unit]
+Description=Inkling coding worker
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Slice=inkling-coding.slice
+Type=simple
+WorkingDirectory=%h/inkling-coding
+EnvironmentFile=%h/.config/inkling-coding.env
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/env node coding/server.mjs
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+KillMode=control-group
+UMask=0077
+MemoryHigh=2500M
+MemoryMax=3G
+TasksMax=256
+CPUQuota=150%
+
+[Install]
+WantedBy=default.target

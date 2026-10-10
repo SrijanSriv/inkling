@@ -1,0 +1,8 @@
+[Unit]
+Description=Inkling coding resource budget
+
+[Slice]
+MemoryHigh=2500M
+MemoryMax=3G
+CPUQuota=150%
+TasksMax=512

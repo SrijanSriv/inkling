@@ -97,6 +97,11 @@ never available there, and calendars only share when people are busy, never what
 
 ## How it works
 
+Tool results are checked before a reply is sent. If the model invents an internal completion note or replies only
+"checking"/"one second", inkling asks it to finish the work and answer. Completed actions are not rerun during
+that final-answer retry. For simple lookups such as birthdays, lists and reminders, the code can send the actual
+result if the model still fails to answer. Dependent tool calls run in order, and unavailable tools are refused.
+
 ```
 WhatsApp (spare number) ──linked device──▶ inkling (Node.js) ──▶ GPT on Azure AI Foundry (or OpenAI, Claude, ...)
                                               │
@@ -266,6 +271,59 @@ inkling. Without them the feature is off. With Docker Compose, set both in `.env
 sign-in links on their phones. `.github/workflows/browser.yml` is an optional template for Azure
 Container Apps, again driven entirely by repository variables.
 
+#### Browser on another computer
+
+The browser can run on a laptop while Inkling stays on a Raspberry Pi. The laptop does the Chromium work;
+the Pi sends browser API requests. No browser CLI is needed on the Pi. Keep the laptop awake and reachable.
+
+For a first version, ask in a **private chat** to search within a website, read JavaScript-rendered pages,
+compare options with source links, or send a screenshot. Sign in yourself using the short-lived live link,
+then say you're done so Inkling can continue. Cookies are saved encrypted per person on the Pi. Downloads,
+file uploads and media playback aren't supported by these tools; use the music tool for speaker playback.
+Purchases, bookings and other final submissions still need the existing screenshot approval.
+Groups can browse public pages, search sites, compare options and request screenshots, including guests
+in groups where they're allowed to talk. Group browsing uses a separate session for that group, never
+anyone's saved logins, private memory or personal details. Sign-ins, live takeover, bookings, purchases
+and personal forms remain in private chats. Private-chat guests do not get browser tools.
+
+On the browser computer, install Node 20+ and the browser's dependencies:
+
+```sh
+cd browser
+npm ci --omit=dev
+npx playwright-core install chromium
+```
+
+Chromium also needs the system libraries listed by Playwright's installer (`install-deps chromium`, with
+administrator access where needed). Copy `browser/.env.example` to `~/.config/inkling-browser.env`, generate
+a secret, and install `scripts/inkling-browser.service` as a user service. Adjust its working directory and
+runtime path to your checkout. Enable lingering if the service should run after logout or reboot.
+The service reads its environment file; plain `npm start` needs these variables exported separately.
+
+The browser defaults to loopback, two simultaneous sessions, four pages per session, and a 30-minute idle
+session timeout. These are configurable in `browser/.env.example`. Completed tasks close their context;
+Chromium exits within a minute of the last context closing. The service template limits browser memory
+to 2 GB. Each person's browser context is separate; stored browser state only returns to their own account.
+
+For private control traffic, forward a local Pi port over SSH to the laptop's browser port:
+
+```sh
+ssh -NT -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 \
+  -L 127.0.0.1:18099:127.0.0.1:8099 browser-user@browser-host
+```
+
+Then set `INKLING_BROWSER_URL=http://127.0.0.1:18099` and the matching `INKLING_BROWSER_SECRET` on Inkling.
+Run the SSH connection as a restarting user service for unattended use. If the laptop is offline, Inkling
+reports that it couldn't verify a result. Compatible providers use `INKLING_MODEL` for browsing unless
+`INKLING_WEB_MODEL` overrides it; choose a model that supports images for visual browsing.
+
+Phone takeover links need a different address from a loopback tunnel. Set `INKLING_BROWSER_LIVE_URL` to the
+address your phone can reach. For trusted home Wi-Fi, bind the browser to its LAN interface (or `0.0.0.0`)
+and use `http://<browser-lan-ip>:8099`. Reserve that LAN address in your router. HTTP live links are for a
+trusted LAN only: use HTTPS and a private network such as Tailscale Serve for access away from home.
+Do not port-forward the browser service onto the internet. Live links expire after 20 minutes and stop
+working when their session closes; anyone with an active link can control that session, so don't share it.
+
 ### 6. Self-changes (optional)
 
 The owner can ask the assistant to change its own code. This needs your own copy of this repository on GitHub with
@@ -279,6 +337,93 @@ Actions enabled, and:
   live and can be rolled back; `.github/workflows/undo.yml` reverts a change and redeploys.
 
 The coding job never gets deploy credentials, and it may not change `.github/`, `.env` or `data/`.
+
+## Local music on a Pi
+
+The optional native music service plays YouTube audio on the host's speakers. Members can control it in groups
+where they can talk to Inkling, including guests in open groups. In private chats, only the owner has music
+access. Everyone shares the same player and queue. It uses `yt-dlp` to search and resolve audio and `mpv` to play it; no `ym`, terminal session,
+Bun binary or second WhatsApp instance is needed. Install `mpv` and a working `yt-dlp` on the host first.
+
+Set these in the checkout's `.env` (replace the user ID and speaker name for your host):
+
+```dotenv
+INKLING_MUSIC_SOCKET=/run/user/1000/inkling-music/control.sock
+# Optional exact description from mpv --audio-device=help. A missing speaker produces an error, not fallback audio.
+INKLING_MUSIC_SPEAKER=My Bluetooth Speaker
+# Optional executable overrides if they are not on the service's PATH:
+# INKLING_MPV=/usr/bin/mpv
+# INKLING_YTDLP=/usr/local/bin/yt-dlp
+```
+
+`INKLING_SECRET_KEY` encrypts music state just like chat data. The socket needs its own directory owned by the
+service user, mode 700; the service sets the socket itself to 600. Nothing listens on a network port.
+Without `INKLING_MUSIC_SOCKET` or custom command configuration, music stays off.
+
+Copy `scripts/inkling-music.service` to `~/.config/systemd/user/inkling-music.service`. Adjust its checkout path
+and Node executable for the host. It runs independently of Inkling, so restarting the assistant does not interrupt
+music. The template creates the private runtime directory and restarts the player service after crashes.
+
+```sh
+systemctl --user daemon-reload
+systemctl --user enable --now inkling-music.service
+```
+
+Enable user lingering if these services must start at boot without a login (`loginctl enable-linger USER`, which
+may need an administrator). Add `Wants=inkling-music.service` and `After=inkling-music.service` to the assistant's
+user unit if it should bring up music automatically. Restart the existing Inkling process after configuring it.
+For foreground development, create a private socket directory and run `npm run music:service` separately.
+
+### Behavior
+
+- Search returns actual videos, excluding channels and playlists. Ellie inspects titles/artists, then supplies
+  a chosen video URL. A text `play` or queue request returns candidates without changing audio. Conditional
+  requests must match the condition; there is no automatic fallback to an unrelated result.
+- Before replacing audio, the service resolves that exact video's audio stream. Unavailable/private videos fail
+  without interrupting the current song. Transient source failures retry once; failures never clear requests.
+- Replies summarize the song title, supplied artist/channel, speaker and upcoming queue in natural language.
+  Raw player JSON and internal confirmations never become WhatsApp replies; a code fallback covers incomplete model answers.
+- Playback success requires a loaded track, an active audio output and advancing playback time. Status reads
+  the engine afresh, distinguishing stopped, loading, playing, paused, buffering, error and a disconnected
+  configured speaker. Software cannot establish whether someone in the room can hear it.
+- `play` changes the current song and preserves requested songs. `queue_add` appends requests in order;
+  `queue_next` puts a song immediately next. Manual next and natural EOF consume the same queue, only after a
+  successful load. A failed queued song stays at its position for retry; remaining songs are never silently lost.
+- The queue is finite by default. `radio_on` explicitly enables related tracks after requests; `radio_off` removes
+  radio tracks and retains requests. Clearing empties upcoming songs and disables radio without stopping the
+  current song. Late radio lookups cannot undo a clear.
+- Queueing while stopped saves songs without starting audio; `resume` starts the saved current song or first
+  queued song. Stop retains the current position and upcoming requests. Previous returns to playback history
+  and puts the song you left at the front of the queue.
+- `volume` sets 0–100%; `volume_delta` adjusts by signed percentage points with clamping. This is player volume,
+  separate from speaker/system volume. Titles such as “Volume One” should be searched as songs.
+- `playlist_save` saves the current song and requested queue under a name (updates an existing name).
+  `playlist_play` explicitly replaces playback/queue with that saved playlist; list/delete manage saved playlists.
+- Current song, position (checkpointed every ten seconds), volume, queue, history and up to 30 playlists are
+  encrypted in `data/music.sealed`. Queues support 200 upcoming songs. An orderly restart checkpoints playback;
+  a crash may replay up to ten seconds. Previously playing music resumes, paused music restores paused, and
+  stopped music stays stopped. Stream URLs are resolved afresh and never persisted.
+- Mutations are ordered; stop cancels in-flight loads. Per-call IDs prevent retries from queueing twice, including
+  after a restart. An interrupted request with an uncertain result is reported as uncertain rather than repeated.
+  The assistant must never use reminders, polls, stop or queue clearing to work around a playback error.
+
+The local CLI uses the same service and queue:
+
+```sh
+npm run music -- search "Veridis Quo Daft Punk"
+# Choose a returned video's URL, then:
+npm run music -- play "https://www.youtube.com/watch?v=EXAMPLE1234"
+npm run music -- queue
+npm run music -- next
+npm run music -- volume_delta -15
+npm run music -- playlist_save "Evening"
+npm run music -- status
+```
+
+For another player, the legacy optional `INKLING_MUSIC_COMMANDS` JSON map still accepts fixed executable/argument
+arrays for `search`, `play`, `pause`, `resume`, `stop`, `next`, `previous`, `volume`, `status`, `queue_add`,
+`queue_next`, `queue`, `queue_clear`. Search/play/queue additions need `{query}`; volume needs `{volume}`.
+Execution never uses a shell. Native socket configuration takes priority over these custom commands.
 
 ## Commands
 
@@ -359,3 +504,59 @@ Their names are trademarks of their owners and are used here only to say what in
 keep their own licences. Most are MIT or Apache-2.0, but Baileys depends on `libsignal`, which is GPL-3.0, and
 sharp's prebuilt `libvips` is LGPL-3.0. If you distribute inkling together with its dependencies (for example as a
 container image), follow those licences for that distribution.
+## Coding projects on another computer
+
+The optional coding worker runs Codex on a Linux laptop while Inkling stays on the Pi. It is available only to the
+owner in a private chat. It can create projects, continue named projects, report status and actual diffs, cancel work,
+and send a completed source archive. It does not change Inkling itself, publish repositories, or deploy applications.
+
+Examples: “make an expense tracker called expenses”, “continue expenses and add categories”, “what coding jobs are
+pending?”, “show the diff for C1”, “send me C1's source”, and “stop C2”. Inkling returns promptly while the work runs
+in the background. One job runs at a time; up to five wait. Projects have separate workspaces and Codex sessions.
+An essential question can be answered with the job ID, for example “C1: use blue”.
+
+The laptop needs Node.js 22+, Python 3, Git/diff/tar, Linux namespace support, a systemd user manager, and the pinned Codex CLI version in
+`coding/.env.example`, already signed in with `codex login`. Copy `coding/` to `~/inkling-coding/coding/`, put worker
+settings in `~/.config/inkling-coding.env` (mode 600), and install `scripts/inkling-coding.service` and `scripts/inkling-coding.slice` in the systemd user-unit folder.
+Generate independent API and state secrets with `openssl rand -base64 32`. Set `INKLING_CODING_BIN` to the actual
+pinned executable, and `INKLING_CODING_TOOL_ROOTS` to colon-separated read-only installation folders for that
+executable, Node/npm, and other approved tools. Never use the whole home directory as a tool root.
+
+The worker listens only on laptop loopback port 8100. Install `scripts/inkling-coding-tunnel.service` on the Pi and
+set `INKLING_CODING_SSH_TARGET` in `~/.config/inkling-coding-tunnel.env`. SSH host keys and key authentication must
+already work. Then configure Inkling:
+
+```dotenv
+INKLING_CODING_URL=http://127.0.0.1:18100
+INKLING_CODING_SECRET=<same API secret as laptop>
+```
+
+Enable both user services, enable user lingering for startup without an interactive login, and restart Inkling after
+typechecking. No public ports or remote Codex endpoint are needed. Changing the installed Codex version deliberately
+fails the worker's version check until its protocol and permissions are revalidated.
+
+Existing source folders can be registered through a trusted `INKLING_CODING_IMPORTS_FILE` JSON mapping of aliases
+to absolute paths. On worker startup, each new alias gets a separate sanitized source copy; originals are never
+edited. An alias is lowercase letters/digits/hyphens, starting with a letter. No paths or arbitrary host commands are
+accepted from the chat. Runtime data, credentials, dependencies and symlinks are excluded or rejected. Review which
+source files are appropriate to import; name-based filtering is not a general secret detector.
+
+Jobs, briefs, questions, detailed check logs and notification cursors are encrypted at rest. Source projects, revision
+snapshots and archives are ordinary code files. Codex sessions run ephemerally under `/run/user/<uid>/`, separately
+from personal Codex settings. The worker proves outside-file/auth access is blocked and command networking is off
+before every coding turn. Verification commands use the same sandbox. It checks JavaScript syntax and configured
+`typecheck`/`test` package scripts; unavailable dependencies or failed checks remain visible. New projects should
+prefer installed tools and dependency-free solutions. Automatic dependency installation is not included in v1.
+
+Up to three recently used project sessions stay in memory for follow-ups. Older sessions are evicted to bound RAM.
+After eviction or a laptop/worker restart, continuing creates a fresh Codex thread using saved requests, the last
+report and existing files. A Pi/Inkling restart reconnects without stopping laptop jobs. Cancellation stops that
+project's transient service and all of its child processes and preserves its files. Active jobs have a 30-minute limit. State and projects live in
+`~/.local/share/inkling-coding` by default; do not delete it to restart the service.
+
+Source delivery uses `.tar.gz` archives, capped at 16 MB for WhatsApp. Diffs include new files and deletions, and large
+diffs fall back to requesting the archive. No source is uploaded to a public host. Optional static `index.html`
+previews use `INKLING_CODING_PREVIEW_URL`, `INKLING_CODING_PREVIEW_HOST`, and port 8101. Each link expires in one
+hour and is revoked when work continues or is cancelled. Preview links are for home Wi-Fi only; the separate preview
+listener exposes no job API. External resources, network requests and form submissions are blocked by its content
+policy. Backend servers and automatic browser testing are outside this initial preview implementation.

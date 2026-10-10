@@ -7,13 +7,21 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { readFileSync } from "node:fs";
 import http from "node:http";
-import { isIP } from "node:net";
+import { BlockList, isIP } from "node:net";
 import { chromium, devices } from "playwright-core";
 import { WebSocketServer } from "ws";
 
 const SECRET = process.env.BROWSER_SECRET ?? "";
 const PORT = Number(process.env.PORT ?? 8080);
-const IDLE_MS = 30 * 60_000;
+const HOST = process.env.BROWSER_HOST || "127.0.0.1";
+const positive = (name, fallback) => {
+  const n = Number(process.env[name] ?? fallback);
+  if (!Number.isSafeInteger(n) || n < 1) throw new Error(`${name} must be a positive integer`);
+  return n;
+};
+const IDLE_MS = positive("BROWSER_SESSION_IDLE_MINUTES", 30) * 60_000;
+const MAX_SESSIONS = positive("BROWSER_MAX_SESSIONS", 2);
+const MAX_PAGES = positive("BROWSER_MAX_PAGES", 4);
 const LIVE_MS = 20 * 60_000;
 // What websites see: set these to where your users are (defaults: British English, this machine's time zone).
 const LOCALE = process.env.BROWSER_LOCALE || "en-GB";
@@ -25,9 +33,25 @@ const log = (msg, extra = {}) => console.log(JSON.stringify({ time: new Date().t
 
 /** @type {import("playwright-core").Browser | undefined} */
 let browser;
+let launching;
 // The full Chromium build (Chrome's regular headless mode), not Playwright's stripped-down headless shell.
-const getBrowser = async () =>
-  browser?.isConnected() ? browser : (browser = await chromium.launch({ channel: "chromium", args: ["--disable-dev-shm-usage"] }));
+async function getBrowser() {
+  if (browser?.isConnected()) return browser;
+  if (!launching) launching = chromium.launch({ channel: "chromium", args: ["--disable-dev-shm-usage"] })
+    .then((b) => {
+      browser = b;
+      b.on("disconnected", () => {
+        if (browser !== b) return;
+        browser = undefined;
+        sessions.clear();
+        liveTokens.clear();
+        for (const ws of wss.clients) ws.close();
+      });
+      return b;
+    }).finally(() => { launching = undefined; });
+  return launching;
+}
+let opening = 0;
 
 /** @type {Map<string, { context: any, page: any, used: number, live: Set<string>, done: boolean }>} */
 const sessions = new Map();
@@ -36,10 +60,11 @@ const liveTokens = new Map();
 
 // ---- never load private, local or cloud-internal addresses (so pages can't reach anything behind this service) ----
 
-const privateIp = (ip) =>
-  /^(10\.|127\.|0\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(ip) ||
-  /^(::1|fc|fd|fe80|::ffff:(10|127|169\.254|192\.168)\.)/i.test(ip);
-const hostChecks = new Map();
+const blocked = new BlockList();
+for (const [ip, prefix] of [["0.0.0.0", 8], ["10.0.0.0", 8], ["127.0.0.0", 8], ["169.254.0.0", 16],
+  ["172.16.0.0", 12], ["192.168.0.0", 16], ["100.64.0.0", 10], ["224.0.0.0", 4], ["240.0.0.0", 4]]) blocked.addSubnet(ip, prefix, "ipv4");
+for (const [ip, prefix] of [["::", 128], ["::1", 128], ["fc00::", 7], ["fe80::", 10], ["ff00::", 8]]) blocked.addSubnet(ip, prefix, "ipv6");
+const privateIp = (ip) => blocked.check(ip, isIP(ip) === 6 ? "ipv6" : "ipv4");
 async function allowedUrl(raw) {
   let url;
   try {
@@ -52,44 +77,54 @@ async function allowedUrl(raw) {
   const host = url.hostname.replace(/^\[|\]$/g, "");
   if (host === "localhost" || host.endsWith(".internal") || host.endsWith(".local")) return false;
   if (isIP(host)) return !privateIp(host);
-  if (!hostChecks.has(host)) {
-    hostChecks.set(
-      host,
-      lookup(host, { all: true })
-        .then((addrs) => addrs.every((a) => !privateIp(a.address)))
-        .catch(() => false),
-    );
-  }
-  return hostChecks.get(host);
+  return lookup(host, { all: true }).then((addrs) => addrs.length > 0 && addrs.every((a) => !privateIp(a.address))).catch(() => false);
 }
 
 // ---- sessions ----
 
 async function openSession(state) {
-  const context = await (await getBrowser()).newContext({
-    ...devices["Pixel 7"],
-    locale: LOCALE,
-    timezoneId: TIMEZONE,
-    storageState: state && typeof state === "object" ? state : undefined,
-  });
-  await context.route("**/*", async (route) => ((await allowedUrl(route.request().url())) ? route.continue() : route.abort("blockedbyclient")));
-  const page = await context.newPage();
-  const id = randomBytes(9).toString("base64url");
-  const session = { context, page, used: Date.now(), live: new Set(), done: false };
-  // Links that open a new tab become the page we work in.
-  context.on("page", (p) => {
-    session.page = p;
-    for (const fn of session.live) fn();
-  });
-  sessions.set(id, session);
-  log("session opened", { sessions: sessions.size });
-  return id;
+  if (sessions.size + opening >= MAX_SESSIONS) throw new Error("The browser is busy. Try again when the current task finishes.");
+  opening++;
+  let context;
+  try {
+    context = await (await getBrowser()).newContext({
+      ...devices["Pixel 7"],
+      locale: LOCALE,
+      timezoneId: TIMEZONE,
+      storageState: state && typeof state === "object" ? state : undefined,
+      acceptDownloads: false,
+      serviceWorkers: "block",
+    });
+    await context.route("**/*", async (route) => ((await allowedUrl(route.request().url())) ? route.continue() : route.abort("blockedbyclient")));
+    // HTTP routing doesn't cover WebSockets; apply the same destination rules there.
+    await context.routeWebSocket("**/*", async (ws) => {
+      const url = ws.url().replace(/^ws:/, "http:").replace(/^wss:/, "https:");
+      if (await allowedUrl(url)) ws.connectToServer();
+      else ws.close();
+    });
+    const page = await context.newPage();
+    const id = randomBytes(9).toString("base64url");
+    const session = { context, page, used: Date.now(), live: new Set(), sockets: new Set(), done: false };
+    // Links that open a new tab become the page we work in.
+    context.on("page", (p) => {
+      if (context.pages().length > MAX_PAGES) { void p.close(); return; }
+      session.page = p;
+      for (const fn of session.live) fn();
+    });
+    sessions.set(id, session);
+    log("session opened", { sessions: sessions.size });
+    return id;
+  } catch (err) {
+    await context?.close().catch(() => {});
+    throw err;
+  } finally { opening--; }
 }
 
 async function closeSession(id) {
   const s = sessions.get(id);
   if (!s) return;
   sessions.delete(id);
+  for (const ws of s.sockets) ws.close();
   for (const [token, t] of liveTokens) if (t.session === id) liveTokens.delete(token);
   await s.context.close().catch(() => {});
   log("session closed", { sessions: sessions.size });
@@ -98,6 +133,12 @@ async function closeSession(id) {
 setInterval(() => {
   for (const [id, s] of sessions) if (Date.now() - s.used > IDLE_MS) void closeSession(id);
   for (const [token, t] of liveTokens) if (t.expires < Date.now()) liveTokens.delete(token);
+  // Release Chromium's memory after all contexts finish; new work launches it again.
+  if (!sessions.size && !opening && browser) {
+    const old = browser;
+    browser = undefined;
+    void old.close().catch(() => {});
+  }
 }, 60_000);
 
 const settle = async (page) => {
@@ -233,7 +274,12 @@ const authorised = (req) => {
 
 async function body(req) {
   const chunks = [];
-  for await (const c of req) chunks.push(c);
+  let size = 0;
+  for await (const c of req) {
+    size += c.length;
+    if (size > 2 * 1024 * 1024) throw new Error("Request is too large.");
+    chunks.push(c);
+  }
   const raw = Buffer.concat(chunks).toString("utf8");
   return raw ? JSON.parse(raw) : {};
 }
@@ -294,8 +340,11 @@ const server = http.createServer(async (req, res) => {
     }
     return send(res, 404, { error: "not found" });
   } catch (err) {
-    log("request failed", { path: url.pathname, error: String(err?.message ?? err).slice(0, 300) });
-    return send(res, 500, { error: String(err?.message ?? err).slice(0, 300) });
+    // Playwright errors can contain page content, signed URLs and browser paths.
+    log("browser request failed");
+    const message = String(err?.message ?? "");
+    const safe = /^(The browser is busy\.|Request is too large\.|Password fields are only|No element \[|Unknown action )/.test(message);
+    return send(res, 500, { error: safe ? message.slice(0, 180) : "The browser couldn't complete that step. It may be offline, the page may have timed out, or the session may have closed." });
   }
 });
 
@@ -306,13 +355,14 @@ server.on("upgrade", (req, socket, head) => {
   const m = /^\/live\/([\w-]{20,})\/ws$/.exec(new URL(req.url ?? "/", "http://browser").pathname);
   const t = m && liveTokens.get(m[1]);
   if (!t || t.expires < Date.now() || !sessions.has(t.session)) return socket.destroy();
-  wss.handleUpgrade(req, socket, head, (ws) => watch(ws, t.session));
+  wss.handleUpgrade(req, socket, head, (ws) => watch(ws, t.session, t.expires));
 });
 
-function watch(ws, id) {
+function watch(ws, id, expires) {
   const s = sessions.get(id);
   if (!s) return ws.close();
   let cdp;
+  const expiry = setTimeout(() => ws.close(1000, "Live link expired"), Math.max(1, expires - Date.now()));
   const start = async () => {
     await cdp?.detach().catch(() => {});
     cdp = await s.context.newCDPSession(s.page);
@@ -323,7 +373,8 @@ function watch(ws, id) {
     await cdp.send("Page.startScreencast", { format: "jpeg", quality: 60, maxWidth: 900, maxHeight: 2000 });
   };
   s.live.add(start);
-  void start();
+  s.sockets.add(ws);
+  void start().catch(() => ws.close());
   ws.on("message", async (raw) => {
     s.used = Date.now();
     try {
@@ -338,14 +389,22 @@ function watch(ws, id) {
         s.done = true;
         ws.send(JSON.stringify({ type: "closed", text: "Thanks! Go back to WhatsApp and say you're done." }));
       }
-    } catch (err) {
-      log("live input failed", { error: String(err?.message ?? err).slice(0, 200) });
+    } catch {
+      log("live input failed");
     }
   });
   ws.on("close", () => {
+    clearTimeout(expiry);
+    s.sockets.delete(ws);
     s.live.delete(start);
     void cdp?.detach().catch(() => {});
   });
 }
 
-server.listen(PORT, () => log("browser service listening", { port: PORT }));
+server.listen(PORT, HOST, () => log("browser service listening", { port: PORT }));
+for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, async () => {
+  server.close();
+  for (const ws of wss.clients) ws.close();
+  await browser?.close().catch(() => {});
+  process.exit(0);
+});

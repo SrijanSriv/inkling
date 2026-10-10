@@ -1,0 +1,22 @@
+# User service template: adjust WorkingDirectory and the Node executable for your host.
+[Unit]
+Description=Inkling music player
+Wants=pipewire.service pipewire-pulse.service
+After=pipewire.service pipewire-pulse.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=%h/inkling
+ExecStart=/usr/bin/env node --import tsx src/music-daemon.ts
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+RuntimeDirectory=inkling-music
+RuntimeDirectoryMode=0700
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=90
+KillMode=control-group
+UMask=0077
+
+[Install]
+WantedBy=default.target

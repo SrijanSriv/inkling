@@ -1,0 +1,22 @@
+[Unit]
+Description=Inkling remote browser
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=%h/inkling/browser
+EnvironmentFile=%h/.config/inkling-browser.env
+ExecStart=/usr/bin/env node server.mjs
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+KillMode=control-group
+UMask=0077
+MemoryHigh=1500M
+MemoryMax=2G
+
+[Install]
+WantedBy=default.target

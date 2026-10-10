@@ -410,6 +410,11 @@ export async function sendImage(chatJid: string, image: Buffer, caption?: string
   if (msg?.key.id && msg.message) sent.set(msg.key.id, msg.message);
 }
 
+export async function sendDocument(chatJid: string, data: Buffer, filename: string): Promise<void> {
+  if (data.length > 16 * 1024 * 1024) throw new Error("Document exceeds delivery limit.");
+  await current().sendMessage(chatJid, { document: data, mimetype: "application/gzip", fileName: filename });
+}
+
 export async function markRead(key: WAMessageKey): Promise<void> {
   await current().readMessages([key]);
 }

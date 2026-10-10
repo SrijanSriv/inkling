@@ -1,3 +1,4 @@
+import { startCodingNotifications } from "./coding.js";
 import { config, findUserByPhone, getUsers, phonesOf, type User } from "./config.js";
 import { respond, type Chat, type ChatActions, type Incoming } from "./agent.js";
 import { disconnectGoogle, googleAccounts, googleConfigured, googleConnectLink, serviceNames } from "./google.js";
@@ -10,7 +11,7 @@ import { addReminder, cancelReminder, listReminders, startReminders } from "./re
 import { clearHistory, encryptStoredChats, groupOpen, loadMemory, setGroupOpen } from "./store.js";
 import { bubbles } from "./text.js";
 import { adminLink, startWeb } from "./web.js";
-import { botPhone, groupInfo, link, markRead, releaseWhatsApp, nameCall, react, resendMedia, sendImage, sendPoll, sendText, sendVoiceNote, setPersonLookup, showTyping, startWhatsApp, type InboundMessage } from "./whatsapp.js";
+import { botPhone, groupInfo, link, markRead, releaseWhatsApp, nameCall, react, resendMedia, sendImage, sendDocument, sendPoll, sendText, sendVoiceNote, setPersonLookup, showTyping, startWhatsApp, type InboundMessage } from "./whatsapp.js";
 import { speak } from "./voice.js";
 import { startScheduler, type RunJob } from "./schedule.js";
 import { startChanges } from "./changes.js";
@@ -179,7 +180,7 @@ async function drain(key: string, queue: { busy: boolean; pending: Queued[] }): 
 
     const stopTyping = showTyping(chatJid);
     try {
-      const incoming: Incoming[] = batch.map(({ msg, user }) => ({ ...msg, from: user.name }));
+      const incoming: Incoming[] = batch.map(({ msg, user }) => ({ ...msg, requestId: msg.key.id || undefined, from: user.name }));
       const reply = await respond(chat, incoming, chatActions(chat, chatJid, last.key));
       stopTyping();
       // Spoken to, it speaks back: with ElevenLabs set up, a short reply to a voice note comes as a voice note. Replies
@@ -239,6 +240,7 @@ function chatActions(chat: Chat, chatJid: string, key?: WAMessageKey): ChatActio
     send: (text) => sendText(chatJid, text),
     sendPrivate: (text) => sendText(`${user.phone}@s.whatsapp.net`, text),
     sendImage: (image, caption) => sendImage(chatJid, image, caption),
+    sendDocument: (data, filename) => sendDocument(chatJid, data, filename),
     resendMedia: (which) => resendMedia(chatJid, which),
     linkPersonal: () => linkPersonal(user),
     setLocation: (place) => setUserLocation(user.id, place),
@@ -427,6 +429,7 @@ startScheduler(runJob);
 startMemoryUpkeep();
 // Self-changes report to the owner in their private chat.
 const owner = getUsers().find((u) => u.owner);
+if (owner) startCodingNotifications(owner.id, notifyPerson(owner), () => link.connected);
 if (owner) startChanges((text) => notifyPerson(owner)(text), owner.id, () => link.connected);
 startReminders(
   async (chatJid, text, urgent) => {
