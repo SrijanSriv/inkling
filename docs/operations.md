@@ -43,6 +43,8 @@ usage allowance. GitHub Pages is unrelated to these private backups.
   one assistant instance and checks the exact commit plus WhatsApp connection. Failure switches back and alerts
   the owner; the failed revision is not retried indefinitely. Only merged default-branch code is eligible.
   Rollback restores code, not application data; review data/schema changes for backward compatibility.
+  This updater deploys the Pi assistant and its music service. Separately installed laptop browser/coding services
+  and trusted maintenance wrappers need manual installation after review; a merge does not update those services.
 
 ## Installation
 
