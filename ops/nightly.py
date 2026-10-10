@@ -57,7 +57,8 @@ def snapshot(c, day):
         restored = state/'restore-check'
         shutil.rmtree(restored, ignore_errors=True)
         restic(c, 'restore', 'latest', '--tag', 'nightly', '--target', restored)
-        recovered = restored/str(stage).lstrip('/')/'recovery'
+        # A relative backup argument restores under its own name, not the absolute snapshot label.
+        recovered = restored/'recovery'
         if inventory(stage/'recovery') != inventory(recovered):
             raise RuntimeError('Restored backup checksum mismatch')
         shutil.rmtree(restored)

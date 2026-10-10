@@ -58,6 +58,8 @@ def main(c):
         # A diverged local branch is never reset or overwritten.
         old=run(['git','rev-parse','HEAD'],cwd=root).stdout.strip()
         run(['git','merge-base','--is-ancestor',old,sha],cwd=root)
+        changed=run(['git','diff','--name-only',old,sha],cwd=root).stdout.splitlines()
+        music_changed=c.get('music_service') and any(n.startswith('src/music') or n in {'package.json','package-lock.json'} for n in changed)
         candidate=releases/sha
         if candidate.exists() and candidate != prior:
             shutil.rmtree(candidate)
@@ -87,14 +89,12 @@ def main(c):
             atomic(candidate/'version.json',{'sha':sha})
             point(current,candidate)
             switched=True
+            if music_changed:
+                run(['systemctl','--user','restart',c['music_service']],timeout=100)
             run(['systemctl','--user','restart',c['service']],timeout=90)
             if not healthy(c,sha):
                 raise RuntimeError('New release did not reconnect WhatsApp')
             run(['git','merge','--ff-only',sha],cwd=root)
-            # Music imports source from the canonical checkout. Restart only for relevant code changes.
-            changed=run(['git','diff','--name-only',old,sha],cwd=root).stdout.splitlines()
-            if c.get('music_service') and any(n.startswith('src/music') or n in {'package.json','package-lock.json'} for n in changed):
-                run(['systemctl','--user','restart',c['music_service']],timeout=100)
             atomic(state/'deploy.json',{'live':sha,'previous':prior_sha,'at':dt.datetime.now(dt.timezone.utc).isoformat()})
             notify(c,'deploy-'+sha,'GitHub update is live on the Pi ('+sha[:7]+'). Code checks passed and WhatsApp reconnected. A recovery backup was made before the update.')
             # Bounded dependency copies; keep the live and previous versions plus recent releases.
@@ -108,6 +108,8 @@ def main(c):
         except Exception:
             if switched:
                 point(current,prior)
+                if music_changed:
+                    run(['systemctl','--user','restart',c['music_service']],timeout=100,check=False)
                 run(['systemctl','--user','restart',c['service']],timeout=90)
                 rolled_back=healthy(c,prior_sha) if prior_sha!='dev' else run(['curl','-fsS','--max-time','10',c['health_url']],check=False).returncode==0
             else:

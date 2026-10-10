@@ -33,10 +33,11 @@ for name in sys.argv[1:]:
  try: assert not pathlib.Path(name).exists(), 'private path visible'
  except PermissionError: pass
 pathlib.Path('.tmp/preflight').write_text('ok')
-s=socket.socket(); s.settimeout(1)
-try: assert s.connect_ex(('127.0.0.1',8100)) != 0, 'network visible'
+try:
+ s=socket.socket(); s.settimeout(1)
+ assert s.connect_ex(('127.0.0.1',8100)) != 0, 'network visible'
 except PermissionError: pass
-print('isolated')`, c.backup_password, configFile, c.codex_auth, path.join(runtime,'auth.json'), c.state] });
+print('isolated')`, c.backup_password, configFile, c.codex_auth, path.join(runtime,'auth.json'), path.join(c.state,'backups','config')] });
   if (probe.exitCode !== 0 || !String(probe.stdout).includes('isolated')) throw new Error('Review sandbox preflight failed');
   const schema = { type:'object', properties:{ title:{type:'string'}, summary:{type:'string'}, body:{type:'string'}, advice:{type:'array',items:{type:'string'}} },required:['title','summary','body','advice'],additionalProperties:false };
   const thread = await rpc.call('thread/start', { cwd:workspace, ephemeral:true, approvalPolicy:'never',

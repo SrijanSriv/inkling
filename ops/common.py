@@ -12,6 +12,10 @@ os.umask(0o077)
 CONFIG = Path(os.environ.get('INKLING_OPS_CONFIG', Path.home() / '.config/inkling-ops/config.json'))
 
 
+class MaintenanceBusy(Exception):
+    pass
+
+
 def config():
     return json.loads(CONFIG.read_text())
 
@@ -54,7 +58,7 @@ def lock(path, blocking=False):
         try:
             fcntl.flock(f, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
         except BlockingIOError:
-            raise RuntimeError('Another maintenance run is active')
+            raise MaintenanceBusy()
         yield
 
 
@@ -78,6 +82,8 @@ def restic(c, *args, cwd=None):
 def entrypoint(fn):
     try:
         fn(config())
+    except MaintenanceBusy:
+        print('Another maintenance run is active; deferred to the next timer tick.', flush=True)
     except Exception as e:
         # Type only, not arbitrary exception strings which may include server responses.
         print(f'Maintenance failed: {type(e).__name__}', flush=True)

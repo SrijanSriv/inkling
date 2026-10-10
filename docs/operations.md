@@ -90,7 +90,7 @@ flock /path/to/operations-state/backup.lock restic snapshots
 flock /path/to/operations-state/backup.lock restic restore latest --target /path/to/private/restore
 ```
 
-The restored original staging path contains `recovery/`: data, `.env`, systemd definitions, source and a manifest.
+The restore directory contains `recovery/`: data, `.env`, systemd definitions, source and a manifest.
 Stop the assistant before restoring data in place. Install the saved source and dependencies, restore `.env` with
 mode 600 and `data/` privately, then adjust service paths for the replacement machine. Start only one WhatsApp
 instance. Tokens may have been revoked since backup; reconnect Google if needed. No backup test sends messages or

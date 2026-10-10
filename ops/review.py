@@ -21,7 +21,7 @@ def github(c, args):
 def safe_public(text):
     # Reject obvious accidental identities, credentials and private deployment addresses before public upload.
     text = re.sub(r'[\w.+-]+@(?:example\.(?:com|org|net)|users\.noreply\.github\.com)\b', '[example address]', text)
-    if len(text) > 200_000 or re.search(r'(?:gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9_-]{20,}|-----BEGIN .*PRIVATE KEY|Bearer\s+[A-Za-z0-9._-]{20,}|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|\b(?:10|192\.168|127)\.\d+\.\d+|\.local\b|/home/[^/\s]+/|\+\d{10,15})', text):
+    if len(text) > 200_000 or re.search(r'(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|GOCSPX-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9_-]{20,}|-----BEGIN .*PRIVATE KEY|Bearer\s+[A-Za-z0-9._-]{20,}|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|\b(?:10|192\.168|127)\.\d+\.\d+|\b[a-z0-9][a-z0-9-]*\.local\b|/home/[^/\s]+/|\+\d{10,15})', text):
         raise RuntimeError('Public output failed privacy check')
 
 
@@ -37,13 +37,15 @@ def changed_files(work):
             raise RuntimeError('Invalid review path')
         if p.parts[0] in {'.github','ops','.git','.codex','.agents','data','node_modules','.tmp','.inkling'} or p.name in {'AGENTS.md','CLAUDE.md'} or p.name.startswith('.env'):
             raise RuntimeError('Protected review path')
+        if name.startswith(('scripts/inkling-nightly.', 'scripts/inkling-update.', 'scripts/inkling-review.')):
+            raise RuntimeError('Protected maintenance service')
         dest = work/p
         if dest.is_symlink() or any((work/Path(*p.parts[:i])).is_symlink() for i in range(1,len(p.parts))):
             raise RuntimeError('Review symlink rejected')
         if dest.exists():
             if not dest.is_file() or dest.stat().st_size > 200_000:
                 raise RuntimeError('Review output is not bounded source text')
-            safe_public(dest.read_text())
+            dest.read_text()  # Require text, not binary artifacts.
     return names
 
 
@@ -120,7 +122,9 @@ def main(c):
             run(['git','add','--',*names],cwd=work)
             run(['git','diff','--cached','--check'],cwd=work)
             patch = run(['git','diff','--cached','--binary'],cwd=work).stdout
-            safe_public(patch)
+            if len(patch) > 200_000:
+                raise RuntimeError('Review patch is too large')
+            safe_public('\n'.join(line[1:] for line in patch.splitlines() if line.startswith('+') and not line.startswith('+++')))
             atomic(state/'last-review-validation.json',{'day':day,'files':names,'typecheck':True,'patchSha256':hashlib.sha256(patch.encode()).hexdigest()})
             run(['git','-c','user.name=Inkling maintenance','-c','user.email=maintenance@users.noreply.github.com','commit','-m',result['title']],cwd=work)
             # Only this host wrapper has GitHub access. The model cannot push, merge or read this token.

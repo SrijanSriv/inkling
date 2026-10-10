@@ -31,7 +31,7 @@ class Boundaries(unittest.TestCase):
             self.assertEqual(result['sourceLocations'],{'agent.ts:50:3':1})
 
     def test_public_payload_rejects_secrets_and_identities(self):
-        for text in ['person@realmail.net','ghp_'+'x'*30,'Bearer '+'x'*40,'/home/actual-person/inkling','.local','+123456789012']:
+        for text in ['person@realmail.net','ghp_'+'x'*30,'github_pat_'+'x'*30,'Bearer '+'x'*40,'/home/actual-person/inkling','private-host.local','+123456789012']:
             with self.subTest(text=text),self.assertRaises(RuntimeError): safe_public(text)
         safe_public('Use someone@example.com in examples. Fix timeout handling.')
 
@@ -47,6 +47,42 @@ class Boundaries(unittest.TestCase):
             with self.assertRaises(RuntimeError): changed_files(root)
             (root/'leak').unlink(); (root/'normal.txt').write_text('public source')
             self.assertEqual(changed_files(root),['normal.txt'])
+
+
+class DeploymentRollback(unittest.TestCase):
+    def test_failed_health_rolls_back_without_changing_checkout(self):
+        import deploy
+        with tempfile.TemporaryDirectory() as d:
+            base=Path(d); root=base/'source'; root.mkdir()
+            def git(*args):
+                return subprocess.run(['git','-C',str(root),*args],check=True,text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE).stdout.strip()
+            git('init','-q')
+            (root/'.gitignore').write_text('.env\ndata/\nversion.json\n')
+            (root/'package.json').write_text('{}')
+            git('add','.'); git('-c','user.name=Test','-c','user.email=test@example.com','commit','-qm','old')
+            old=git('rev-parse','HEAD')
+            (root/'feature.txt').write_text('new source')
+            git('add','.'); git('-c','user.name=Test','-c','user.email=test@example.com','commit','-qm','new')
+            new=git('rev-parse','HEAD'); git('update-ref','refs/remotes/origin/master',new); git('reset','--hard',old)
+            (root/'.env').write_text('PRIVATE_FIXTURE=not-a-real-secret\n'); (root/'data').mkdir()
+            (root/'version.json').write_text(json.dumps({'sha':old}))
+            releases=base/'releases'; releases.mkdir(); (releases/'current').symlink_to(root,target_is_directory=True)
+            (base/'state').mkdir()
+            calls=[]
+            from common import run as real_run
+            def fake(args,**kw):
+                calls.append(list(map(str,args)))
+                if args[0]=='git' and args[1]=='fetch': return subprocess.CompletedProcess(args,0,'','')
+                if args[0] in ['npm','fake-node','systemctl','curl']: return subprocess.CompletedProcess(args,0,'','')
+                return real_run(args,**kw)
+            c={'state':str(base/'state'),'checkout':str(root),'branch':'master','releases':str(releases),'tool_path':'/usr/bin:/bin','data':str(root/'data'),'node':'fake-node','service':'fake.service','health_url':'unused'}
+            with patch('deploy.run',side_effect=fake),patch('deploy.healthy',side_effect=[False,True]),patch('deploy.snapshot') as backup,patch('deploy.notify'):
+                with self.assertRaises(RuntimeError): deploy.main(c)
+            self.assertEqual((releases/'current').resolve(),root.resolve())
+            self.assertEqual(git('rev-parse','HEAD'),old)
+            self.assertTrue(json.loads((base/'state/deploy.json').read_text())['rollbackHealthy'])
+            self.assertEqual(sum(args[:3]==['systemctl','--user','restart'] for args in calls),2)
+            backup.assert_called_once()
 
 
 if __name__=='__main__': unittest.main()
