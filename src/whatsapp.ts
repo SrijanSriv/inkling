@@ -327,8 +327,9 @@ function current(): WASocket {
   return sock;
 }
 
-export async function sendText(chatJid: string, text: string): Promise<void> {
-  const msg = await current().sendMessage(chatJid, { text });
+export async function sendText(chatJid: string, text: string, messageId?: string): Promise<void> {
+  const msg = await current().sendMessage(chatJid, { text }, messageId ? { messageId } : undefined);
+  if (messageId && !msg?.key.id) throw new Error("Message acceptance unknown");
   if (msg?.key.id && msg.message) {
     sent.set(msg.key.id, msg.message);
     if (sent.size > 500) sent.delete(sent.keys().next().value!);

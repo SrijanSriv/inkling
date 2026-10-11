@@ -6,6 +6,7 @@ import { config, getUsers } from "./config.js";
 import { log } from "./log.js";
 import { chatFile, groupIds, loadArchive, loadMemory, loadRecap, saveMemory, saveRecap } from "./store.js";
 import { readSealedJson, writeSealedJson } from "./vault.js";
+import { recallReading } from "./reading-library.js";
 
 // Longer-term memory, on top of the last 40-60 turns of history and the saved notes:
 // - a recap: when old turns scroll out of history they're archived, and a running summary of them (open loops,
@@ -46,6 +47,7 @@ export async function refreshRecap(chatId: string, userId: string, group: boolea
 
 /** Searches the archived (older) conversation for the words in a query. Best matches first, with their dates. */
 export function recall(chatId: string, query: string): string {
+  const reading = recallReading(chatId, query);
   const words = [...new Set(query.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? [])];
   if (!words.length) return "Give a few words to search for.";
   const archive = loadArchive(chatId);
@@ -57,7 +59,7 @@ export function recall(chatId: string, query: string): string {
     .filter((h) => h.score > 0)
     .sort((a, b) => b.score - a.score || b.i - a.i)
     .slice(0, 6);
-  if (!hits.length) return `Nothing older mentions ${words.join(", ")}.`;
+  if (!hits.length) return reading || `Nothing older mentions ${words.join(", ")}.`;
   // Each hit comes with the turn either side of it, so a question and its answer stay together; overlapping
   // windows are merged into one passage.
   const keep = new Set(hits.flatMap(({ i }) => [i - 1, i, i + 1]).filter((i) => i >= 0 && i < archive.length));
@@ -68,7 +70,7 @@ export function recall(chatId: string, query: string): string {
     passages[passages.length - 1].push(`${archive[i].role === "user" ? "Them" : "You"}: ${archive[i].content.slice(0, 600)}`);
     last = i;
   }
-  return passages.map((p) => p.join("\n")).join("\n---\n");
+  return [passages.map((p) => p.join("\n")).join("\n---\n"), reading].filter(Boolean).join("\n\n");
 }
 
 // ---- the daily tidy of saved notes ----
@@ -177,4 +179,3 @@ export function clearTidyBackup(chatId: string): void {
 
 /** A note as it's saved: the fact, then the date, so newer can win over older later. */
 export const datedNote = (note: string) => `${note.trim()} (${new Date().toISOString().slice(0, 10)})`;
-

@@ -14,6 +14,7 @@ import { bubbles } from "./text.js";
 import { adminLink, startWeb } from "./web.js";
 import { botPhone, groupInfo, link, markRead, releaseWhatsApp, nameCall, react, resendMedia, sendImage, sendDocument, sendPoll, sendText, sendVoiceNote, setPersonLookup, showTyping, startWhatsApp, type InboundMessage } from "./whatsapp.js";
 import { startOperationNotifications } from "./operations.js";
+import { startReadingNotifications } from "./reading-sharing.js";
 import { speak } from "./voice.js";
 import { startScheduler, type RunJob } from "./schedule.js";
 import { startChanges } from "./changes.js";
@@ -457,6 +458,17 @@ startMemoryUpkeep();
 const owner = getUsers().find((u) => u.owner);
 if (owner) startCodingNotifications(owner.id, notifyPerson(owner), () => link.connected);
 if (owner) startOperationNotifications(owner.id, notifyPerson(owner), () => link.connected);
+startReadingNotifications({
+  connected: () => link.connected && !handingOver,
+  permitted: async (group, by) => {
+    if (queues.get(group)?.busy) return false;
+    const authorizer = getUsers().find(u => u.id === by && u.owner);
+    if (!authorizer) return false;
+    const info = await groupInfo(`${group.slice("group-".length)}@g.us`, true);
+    return phonesOf(authorizer).some(phone => info.phones.includes(phone)) && !queues.get(group)?.busy;
+  },
+  send: (group, text, id) => sendText(`${group.slice("group-".length)}@g.us`, text, id),
+});
 if (owner) startChanges((text) => notifyPerson(owner)(text), owner.id, () => link.connected);
 startReminders(
   async (chatJid, text, urgent) => {

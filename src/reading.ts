@@ -7,7 +7,7 @@ import { JSDOM, VirtualConsole } from "jsdom";
 import { z } from "zod";
 import { responses, tuned } from "./ai.js";
 import { assertPublic } from "./browse.js";
-import { config } from "./config.js";
+import { config, getUsers } from "./config.js";
 import { htmlToText } from "./text.js";
 import { readSealedJson, writeSealedJson } from "./vault.js";
 import { readingSources, type ReadingSource } from "./reading-sources.js";
@@ -222,8 +222,9 @@ export class ReadingIntake {
         sections.push(note);
       }
       if (!sections.length) throw new Error("Empty article");
+      const memoryOwner = getUsers().find(u => u.owner && u.id === process.env.INKLING_READING_MEMORY_USER_ID)?.id;
       writeSealedJson(this.noteFile(item.id), { version: 1, id: item.id, source: item.source, url: item.url, title: article.title || item.title, author: item.author,
-        published: item.published, readAt: this.deps.now(), method: article.method, coverage: article.coverage, sections, topics: [...new Set(sections.flatMap(s => s.topics))] });
+        published: item.published, readAt: this.deps.now(), method: article.method, coverage: article.coverage, sections, topics: [...new Set(sections.flatMap(s => s.topics))], memoryOwner });
       item.status = "read";
     } catch {
       item.status = item.attempts >= 3 ? "failed" : "pending";
@@ -247,14 +248,5 @@ export class ReadingIntake {
   private prunedDay = "";
 }
 
-/** Operator/local retrieval only for now. No unsolicited delivery or cross-chat model tool. */
-export function searchReading(query: string, limit = 10): unknown[] {
-  const directory = path.join(config.dataDir, "reading", "articles");
-  if (!existsSync(directory)) return [];
-  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-  const records = readdirSync(directory).filter(f => /^[a-f0-9]{64}\.sealed$/.test(f)).map(f =>
-    readSealedJson<any>(path.join(directory, f.replace(/\.sealed$/, ".json")), {}));
-  return records.map(note => ({ note, score: words.reduce((n, word) => n + (JSON.stringify(note).toLowerCase().includes(word) ? 1 : 0), 0) }))
-    .filter(r => !words.length || r.score > 0).sort((a,b) => b.score - a.score || b.note.readAt - a.note.readAt)
-    .slice(0, Math.min(50, Math.max(1, limit))).map(r => r.note);
-}
+// Kept as an export for operator callers; the WhatsApp process imports the lightweight library directly.
+export { searchReading } from "./reading-library.js";

@@ -632,5 +632,8 @@ See [the v1 plan](docs/memory-v1-plan.md) for scope, evidence, limitations and v
 
 A separate low-priority worker can check public RSS/Atom feeds, read selected articles and save encrypted,
 source-linked notes. It uses direct text extraction on the host and the optional remote browser as a fallback.
-Daily limits, duplicate tracking and retry state survive restarts. It sends no WhatsApp messages or digests,
-and does not change personal memory. Off by default; see [reading intake setup and limits](docs/reading-intake.md).
+Daily limits, duplicate tracking and retry state survive restarts. Intake itself sends no messages. Optional
+sharing posts a 50-word summary and source link to one explicitly configured group through the existing WhatsApp
+connection. Optional owner-only article memory is searchable through recall in that owner's private chat,
+without filling their always-loaded personal notes. All three features are off by default; see
+[reading setup, sharing and memory](docs/reading-intake.md).

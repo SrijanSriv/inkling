@@ -1,8 +1,8 @@
 # Public reading intake v1
 
-A separate, opt-in worker discovers and reads public articles. It imports no WhatsApp sending, Gmail, personal
-memory, or chat tools. There are no digests, recommendations or automatic outgoing messages. Chat/group delivery
-and model-tool access to this library are deliberately separate future work.
+A separate, opt-in worker discovers and reads public articles. It imports no WhatsApp sending, Gmail or chat
+action tools. Optional group sharing uses an encrypted outbox consumed by the existing WhatsApp process. Optional
+owner-only article memory connects source-linked notes to private recall. No digests or extra WhatsApp session.
 
 ## Run
 
@@ -68,7 +68,7 @@ State and individual article notes live in `INKLING_DATA_DIR/reading`, encrypted
 Notes retain source, original link, author/date when supplied, reading time, extraction method/coverage and
 section summaries. Notes expire after 180 days; raw article bodies are not persisted. These files are included
 in existing whole-data-directory backups. Notes are not injected into personal memory or prompts automatically.
-Local keyword retrieval is available now; chat retrieval/sharing needs a separate permission design later.
+Local keyword retrieval is available; optional private recall and group sharing are described below.
 
 Logs report aggregate counts only, never page bodies, note text, interest keywords, browser secrets or links.
 External text is information, never instructions. Summarization has no tools and cannot send messages or execute
@@ -97,3 +97,49 @@ advancing the feed validator. Tests used scratch encrypted data and injected mod
 emails or invites were sent. Live public feed checks parsed all 14 sources, and sample article extraction worked
 for Aeon, IEEE Spectrum and Latent Space. No paid model call or live browser fallback was exercised in these checks.
 The service has not been installed or enabled on a deployment by this source change.
+
+## Optional group posts
+
+Set these three environment variables in the protected configuration used by **both** the reading worker and
+main assistant, then restart them:
+
+- `INKLING_READING_SHARE_GROUP`: one explicit existing `group-<id>`. No automatic selection or future new groups.
+- `INKLING_READING_SHARE_BY`: the registered owner ID authorizing these recurring public posts.
+- `INKLING_READING_SHARE_SINCE`: an ISO timestamp. Only articles read on/after activation qualify; no historical flood.
+
+For each eligible saved article, the worker creates a natural English summary from its public section notes.
+The final summary must contain exactly 50 whitespace-separated words, validated after whitespace/dash cleanup.
+The original article URL is appended by code. Partial reads carry a separate short disclosure. Extra generation
+cost is bounded to twice the daily reading limit in model calls, reserved persistently before each call; at most
+two calls per preparation attempt, three attempts total, with an hour between failed attempts. Preparation failure
+does not discard the reading note. Shares, preparation state and delivery receipts remain encrypted and backed up.
+
+The main assistant checks the outbox every 15 seconds while connected, waits when the group chat is busy, and
+rechecks the configured authorizer's owner registration and live group membership before sending. It sends as the
+assistant, not as a person's linked WhatsApp. Explicit recurring authorization replaces a per-article confirmation.
+No personal history, contacts, email, interest rationale or private memory is passed to the summary model or group.
+
+Completed receipts suppress repeat posts. A stable WhatsApp message ID is attached to each post. If a process
+crashes mid-send or network acceptance is unknown, the receipt is held as `uncertain`, not blindly resent. This
+avoids duplicate broadcasts but may require an operator to reconcile a missing post before retrying. It is not a
+claim of exactly-once network delivery. `npm run reading:worker -- status` includes share counts and uncertain/failed
+states. Changing the group/authorizer does not redirect old queued posts. Posts already delivered cannot be erased
+by removing a local article note. Source notes and receipts expire after 180 days.
+
+## Optional personal article memory
+
+Set `INKLING_READING_MEMORY_USER_ID` to the registered owner's ID. Newly read notes are tagged with that exact
+owner. In their **private chat only**, the existing `recall` tool searches these notes alongside their own archived
+conversation, with source links, reading dates and coverage. Other people's DMs and all groups cannot access this
+personal reading memory. The separately authorized group posts contain only public article summaries.
+
+Existing notes are not automatically assigned to a new owner. An operator can explicitly tag existing public
+reading notes for their owner when requested; stop intake before that migration. Owner changes/configuration changes
+never hand old tagged notes to someone else. The library stays encrypted in the original data directory, remains
+part of backups, and expires after 180 days. Facts from articles are attributed external claims, not personal facts
+or instructions. Notes are retrieved when relevant rather than copied into the always-loaded personal notes.
+
+Additional validation: 22 isolated sharing checks and 12 personal-memory checks used scratch encrypted data and
+mock send/model functions. They cover exact word counts, authorization changes, owner/group isolation, original
+links, no historical backfill, failure backoff, deduplication and uncertain-send recovery. No test sends to real
+WhatsApp recipients.

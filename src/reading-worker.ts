@@ -5,6 +5,7 @@ import { z } from "zod";
 import { config } from "./config.js";
 import { ReadingIntake, searchReading } from "./reading.js";
 import { log } from "./log.js";
+import { prepareReadingShares, readingSharingStatus } from "./reading-sharing.js";
 
 const integer = (name: string, fallback: number, min: number, max: number) => z.coerce.number().int().min(min).max(max).parse(process.env[name] ?? fallback);
 const sources = process.env.INKLING_READING_SOURCES_FILE ? z.array(z.object({
@@ -21,7 +22,7 @@ if (mode === "search") {
     timezone: process.env.INKLING_READING_TIMEZONE || "UTC", interests: (process.env.INKLING_READING_INTERESTS || "").split(",").map(s => s.trim()).filter(Boolean).slice(0, 30) };
   new Intl.DateTimeFormat("en", { timeZone: options.timezone }).format();
   if (mode === "status") {
-    console.log(JSON.stringify(new ReadingIntake(options).status(), null, 2));
+    console.log(JSON.stringify({ ...new ReadingIntake(options).status(), sharing: readingSharingStatus() }, null, 2));
   } else if (mode !== "run" && mode !== "once") {
     throw new Error("Use run, once, status or search");
   } else if (process.env.INKLING_READING_ENABLED !== "true") {
@@ -36,6 +37,7 @@ if (mode === "search") {
       const intake = new ReadingIntake(options);
       do {
         await intake.tick();
+        await prepareReadingShares().catch(() => log.warn("reading share preparation delayed"));
         const status = intake.status();
         log.info({ ...status.counts, articlesAttempted: status.articlesAttempted, modelCalls: status.modelCalls,
           browserAttempts: status.browsers, feedFailures: status.sources.filter(s => s.failures > 0).length }, "reading intake tick");
