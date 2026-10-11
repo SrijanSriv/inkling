@@ -62,6 +62,18 @@ function show(l: { name: string; items: Item[] }): string {
 }
 
 export function handleList(name: string, args: Record<string, unknown>, chatId: string, by: string): string {
+  // Tool arguments still need runtime checks, even when the provider advertises strict schemas.
+  if (name === "list_add" || name === "list_update") {
+    if (typeof args.list !== "string" || !args.list.trim()) return "Error: Give a nonempty list name.";
+    const fields = name === "list_add" ? ["items"] : ["tick", "remove"];
+    for (const field of fields) {
+      const values = args[field];
+      if (!Array.isArray(values) || !values.every(value => typeof value === "string" && value.trim())) {
+        return `Error: ${field} must be an array of nonempty strings.`;
+      }
+    }
+    if (name === "list_update" && typeof args.clear_ticked !== "boolean") return "Error: clear_ticked must be a boolean.";
+  }
   // List names are arbitrary strings, including Object.prototype property names.
   const lists: Lists = Object.assign(Object.create(null), readSealedJson<Lists>(file(chatId), {}));
   const k = typeof args.list === "string" ? key(args.list) : "";
