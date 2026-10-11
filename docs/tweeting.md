@@ -23,7 +23,7 @@ publication. A plain yes to a recent tweet cannot consume an unrelated outgoing 
 
 The background loop runs in the existing Pi process, using the configured model through the provider-neutral AI
 adapter. It skips work while chat queues are busy, processes tasks serially, and gives each provider request a
-30-second timeout with SDK retries disabled. There is no extra local model or browser.
+60-second timeout with SDK retries disabled. There is no extra local model or browser.
 
 Automatic assessment uses up to four batches of five inputs daily, one in each local window: 09:00–12:00,
 12:00–15:00, 15:00–18:00 and 18:00–22:00. It waits 15 minutes to batch a smaller queue. Classification and eligibility
