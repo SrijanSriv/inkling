@@ -368,6 +368,8 @@ export function tweetActionFor(owner: string, text: string, replyToId?: string):
   const context = quoted || tweetConfirmationAmbiguous(owner);
   const named = /\b(?:tweet|tweets|twitter|T\d+)\b/i.test(text);
   if (!named && !context) return;
+  // A draft's subject may mention clearing memory or changing style; those aren't editor commands.
+  if (named && /\b(?:draft|write|compose|create|make|give|suggest)\s+(?:(?:me|us)\s+)?(?:(?:a|an|the|another|one|two|some)\s+)?tweets?\b/i.test(text)) return "draft";
   if (named && /\b(?:pause|stop|disable|turn off)\b/i.test(text)) return "pause";
   if (named && /\b(?:resume|enable|start suggestions|turn on)\b/i.test(text)) return "resume";
   if (named && /\b(?:forget|clear|reset|delete)\b/i.test(text) && /\b(?:memory|profile|all|ideas)\b/i.test(text)) return "forget";
