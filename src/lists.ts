@@ -4,7 +4,7 @@ import { readSealedJson, writeSealedJson } from "./vault.js";
 
 // Lists per chat: a person's own lists in their private chat, shared lists in a group.
 
-type Item = { text: string; done: boolean; by: string };
+type Item = { text: string; done: boolean; by: string; sourceId?: string };
 type Lists = Record<string, { name: string; items: Item[] }>;
 
 const file = (chatId: string) => chatFile(chatId, "lists.json");
@@ -87,4 +87,13 @@ export function handleList(name: string, args: Record<string, unknown>, chatId: 
     }
   }
   return `Unknown list tool ${name}`;
+}
+
+/** The source receipt makes workflow additions safe to reconcile after a crash. */
+export function addLinkItem(chatId: string, name: string, text: string, by: string, sourceId: string): void {
+  const lists: Lists = Object.assign(Object.create(null), readSealedJson<Lists>(file(chatId), {}));
+  const list = lists[key(name)] ??= { name, items: [] };
+  if (list.items.some(item => item.sourceId === sourceId)) return;
+  list.items.push({ text, by, done: false, sourceId });
+  writeSealedJson(file(chatId), lists);
 }

@@ -1,3 +1,4 @@
+import { linkWorkflowCandidate, reserveLink, runLinkWorkflow } from "./link-workflow.js";
 import { startCodingNotifications } from "./coding.js";
 import { config, findUserByPhone, getUsers, phonesOf, type User } from "./config.js";
 import { respond, type Chat, type ChatActions, type Incoming } from "./agent.js";
@@ -22,7 +23,7 @@ import { linkPersonal as startLinking, personalConnected, setBotPhone, startPers
 import { startAnalytics, stopAnalytics } from "./analytics.js";
 import type { WAMessageKey } from "baileys";
 
-type Queued = { msg: InboundMessage; user: User };
+type Queued = { msg: InboundMessage; user: User; workflow?: boolean };
 
 // Messages that arrive while the assistant is still working on a chat's last one get answered together.
 const queues = new Map<string, { busy: boolean; pending: Queued[] }>();
@@ -66,6 +67,12 @@ function onMessage(msg: InboundMessage): void {
   if (auto) {
     const sent = auto.photo ? sendImage(msg.chatJid, auto.photo, auto.text) : sendText(msg.chatJid, auto.text ?? "");
     sent.catch((err) => log.warn({ err }, "couldn't send an auto-reply"));
+  }
+
+  if (chatId && user && !msg.images.length && msg.key.id && linkWorkflowCandidate(chatId, user.id, msg.text, msg.plainText !== false)) {
+    if (reserveLink(chatId, user.id, msg.key.id)) enqueue(msg, user, true);
+    // A duplicate or rate-limited workflow message must not fall through to ordinary dispatch.
+    return;
   }
 
   if (msg.group) {
@@ -135,11 +142,11 @@ const speakable = (reply: string) => !!reply && reply.length <= 400 && bubbles(r
 /** A note to send a guest after their next reply (the heads-up near their daily limit), by chat key. */
 const guestNotes = new Map<string, string>();
 
-function enqueue(msg: InboundMessage, user: User): void {
+function enqueue(msg: InboundMessage, user: User, workflow = false): void {
   const key = msg.group ? groupId(msg.chatJid) : user.id;
   const queue = queues.get(key) ?? { busy: false, pending: [] };
   queues.set(key, queue);
-  queue.pending.push({ msg, user });
+  queue.pending.push({ msg, user, workflow });
   keepPending(msg); // on disk until its turn starts, so a restart before then doesn't lose it
   if (!queue.busy) void drain(key, queue);
 }
@@ -159,7 +166,24 @@ async function handOver(): Promise<void> {
 async function drain(key: string, queue: { busy: boolean; pending: Queued[] }): Promise<void> {
   queue.busy = true;
   while (queue.pending.length && !handingOver) {
-    const batch = queue.pending.splice(0);
+    // Workflow entries use the same serial chat queue, but never mix with human requests.
+    const first = queue.pending[0];
+    if (first.workflow) {
+      queue.pending.shift();
+      const { msg, user } = first;
+      try {
+        const members = msg.group ? async () => {
+          const info = await groupInfo(msg.chatJid, true);
+          return getUsers().filter(u => phonesOf(u).some(phone => info.phones.includes(phone))).map(u => u.id);
+        } : undefined;
+        const reply = await runLinkWorkflow(key, user.id, msg.key.id!, msg.text, members);
+        if (reply) await sendReply(msg.chatJid, reply);
+      } catch { log.warn({ chat: key }, "link workflow delivery failed"); }
+      finally { startedPending([msg]); }
+      continue;
+    }
+    const boundary = queue.pending.findIndex(item => item.workflow);
+    const batch = queue.pending.splice(0, boundary < 0 ? queue.pending.length : boundary);
     startedPending(batch.map((b) => b.msg));
     const { msg: last, user } = batch.at(-1)!;
     const { chatJid } = last;

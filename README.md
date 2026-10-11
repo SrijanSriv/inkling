@@ -592,3 +592,38 @@ policy. Backend servers and automatic browser testing are outside this initial p
 runtime diagnostics, an isolated nightly Codex review that proposes GitHub PRs, owner-only WhatsApp notifications,
 and checked deployment of the reviewed default branch with rollback. These jobs need explicit host installation and
 private configuration; they are not enabled by cloning the repository or starting Inkling.
+
+
+### Memory reliability and recurring links
+
+Saved notes keep their existing encrypted format. An explicit correction can replace exact older notes in one
+write. Note cleanup validates model output and backs off failures, preserving the existing notes and backup.
+Ambiguous contradictions are retained for clarification instead of choosing an instruction solely by its date.
+
+A registered user can opt into bare-link processing in their private chat, for example:
+“Automatically summarize every bare link I send in English, about 50 words, and save it to my links list.”
+An admin can enable the same rule in a group, explicitly naming whether it applies to themselves or all registered
+members. Ask to show the link rule or disable automatic links to inspect or stop it. It stays off until configured. An operator can also provision a registered person’s initial private rule on an explicit owner request, without granting admin privileges; existing personal settings are preserved.
+
+The rule reads one plain HTTP(S) URL, summarizes readable page text and saves one item to a list in that chat.
+Captions, multiple links and ordinary group conversation retain normal addressed-message behavior. It does not
+open a browser, sign in, fill forms or add hiring reminders. Private and group lists remain separate. Work is
+bounded to twenty new workflow links per hour per chat and twenty pending entries; duplicate receipts expire after
+fourteen days on next access, up to five hundred entries. Finished receipts retain no duplicate summary text. Links beyond these limits are ignored by the automatic rule.
+Prepared receipts and source IDs protect list additions during recovery; delivery of a WhatsApp reply is not an
+exactly-once guarantee. Queued links older than thirty minutes are not processed after recovery.
+
+Coding continuations that encounter an unreachable laptop are saved encrypted on the Pi, with unknown acceptance
+reported honestly. Ask for pending coding requests, then explicitly resume or cancel one. Nothing automatically
+launches when the laptop reconnects. Resume reconciles the original request ID with the worker; cancellation
+withdraws it atomically, including delayed submissions. Completed work is not undone and later job revisions are
+not automatically cancelled. Ten unresolved requests are allowed; requests older than seven days must be
+reconciled/cancelled before a fresh instruction. New-project offline queuing is not supported.
+
+When updating an existing installation, update the separate laptop coding worker as well as the Pi before using
+saved-request resume/cancellation. Use the existing service installation procedure with the worker idle; preserve
+its configuration, encryption key and job data. The new worker reads existing state without rewriting projects.
+Older workers reject the new reconciliation operations, so the Pi keeps uncertain requests rather than replaying
+them unsafely. New state stays in the existing data directory and is included in normal backups.
+
+See [the v1 plan](docs/memory-v1-plan.md) for scope, evidence, limitations and validation.

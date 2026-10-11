@@ -28,6 +28,21 @@ export class Worker {
   view(job) { return { id: job.id, project: job.project, revision: job.revision, state: job.state, report: job.report || '', question: job.question?.questions || null, files: (job.changed || []).slice(0, 100), changedFiles: (job.changed || []).length, checks: (job.checks || []).map(c => ({ ...c, output: c.output.slice(0, 600) })), preview: job.preview || null }; }
   request(input) {
     const owner = text(input.owner, 80), action = input.action;
+    if (action === 'withdraw') {
+      const receiptKey = `${owner}:${text(input.requestId, 200)}`;
+      (this.state.withdrawn ??= {})[receiptKey] = true;
+      this.save(); // Block even a delayed original HTTP request that has not arrived yet.
+      const id = this.state.receipts[receiptKey];
+      if (!id) return { withdrawn: true, state: 'not accepted' };
+      const job = this.job(id, owner);
+      if (this.state.receiptRevisions?.[receiptKey] !== job.revision) return { withdrawn: true, state: job.state, message: 'The accepted revision cannot be matched to the current revision; current work was not cancelled. Use the job cancel tool if you intend to stop it.' };
+      if (running.has(job.state) || job.state === 'queued') return { withdrawn: true, ...this.request({ action: 'cancel', owner, job: id, requestId: `${input.requestId}:cancel` }) };
+      return { withdrawn: true, state: job.state, message: 'The earlier work was already inactive; it was not undone.' };
+    }
+    if (action === 'receipt') {
+      const id = this.state.receipts[`${owner}:${text(input.requestId, 200)}`];
+      return id ? { ...this.view(this.job(id, owner)), acceptedRevision: this.state.receiptRevisions?.[`${owner}:${input.requestId}`] ?? null } : null;
+    }
     if (action === 'projects') return Object.entries(this.state.projects).map(([name, p]) => ({ name, lastJob: p.lastJob }));
     if (action === 'status') return input.job ? this.view(this.job(input.job, owner)) : this.state.jobs.filter(j => j.owner === owner).slice(-20).map(j => this.view(j));
     if (action === 'diff') { const job = this.job(input.job, owner); return { job: job.id, revision: job.revision, diff: job.patch || 'No completed diff yet.' }; }
@@ -38,6 +53,7 @@ export class Worker {
     }
     if (!['start', 'continue', 'cancel'].includes(action)) throw new Error('Unsupported coding operation.');
     const receipt = text(input.requestId, 200), receiptKey = `${owner}:${receipt}`;
+    if (this.state.withdrawn?.[receiptKey]) throw new Error('This submission was withdrawn. Give a fresh instruction.');
     if (this.state.receipts[receiptKey]) return this.view(this.job(this.state.receipts[receiptKey], owner));
     let job;
     if (action === 'start') {
@@ -77,6 +93,7 @@ export class Worker {
       }
     }
     this.state.receipts[receiptKey] = job.id;
+    (this.state.receiptRevisions ??= {})[receiptKey] = job.revision;
     this.save(); setImmediate(() => this.pump()); return this.view(job);
   }
   ensureQueue() { if (this.state.jobs.filter(j => j.state === 'queued').length >= 5) throw new Error('The coding queue is full.'); }

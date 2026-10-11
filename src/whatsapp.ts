@@ -36,7 +36,9 @@ export type InboundMessage = Incoming & {
   phone: string | undefined;
   senderName: string;
   key: WAMessageKey;
-  /** Set for group chats. The assistant only answers when addressed: @mentioned, replied to, or called by name. */
+  /** Distinguishes actual text from media captions for opt-in bare-link rules. */
+  plainText?: boolean;
+  /** Set for group chats. Normally answered when addressed; an enabled bare-link rule is a narrow exception. */
   group?: { addressed: boolean };
 };
 export type OnMessage = (msg: InboundMessage) => void;
@@ -143,6 +145,7 @@ async function parse(socket: WASocket, m: WAMessage): Promise<InboundMessage | u
     content?.extendedTextMessage?.text ??
     content?.imageMessage?.caption ??
     (poll ? `(made a poll: "${poll.name}" with options ${poll.options?.map((o) => o.optionName).join(", ")})` : "");
+  const plainText = !!(content?.conversation || content?.extendedTextMessage);
   const phone = await phoneFor(socket, m.key);
   const senderName = m.pushName ?? "someone";
 
@@ -160,7 +163,7 @@ async function parse(socket: WASocket, m: WAMessage): Promise<InboundMessage | u
       (!!ctx?.participant && me.has(jidNormalizedUser(ctx.participant)));
     group = { addressed };
     // Messages not meant for the assistant are only kept as short-term context, so skip downloading anything else.
-    if (!addressed) return { chatJid, phone, senderName, key: m.key, at: new Date(), text: [spoken, text].filter(Boolean).join("\n"), images: [], group };
+    if (!addressed) return { chatJid, phone, senderName, key: m.key, at: new Date(), text: [spoken, text].filter(Boolean).join("\n"), images: [], group, plainText };
   }
   if (!phone) {
     log.warn({ chatJid }, "couldn't work out the sender's phone number");
@@ -223,6 +226,7 @@ async function parse(socket: WASocket, m: WAMessage): Promise<InboundMessage | u
     chatJid,
     phone,
     senderName,
+    plainText,
     group,
     key: m.key,
     at: new Date(Number(m.messageTimestamp ?? Date.now() / 1000) * 1000),
@@ -270,9 +274,9 @@ async function hear(socket: WASocket, m: WAMessage, mimetype: string | null | un
 const groups = new Map<string, { name: string; phones: string[]; fetched: number }>();
 
 /** The group's name and its members' phone numbers (cached for a few minutes). */
-export async function groupInfo(chatJid: string): Promise<{ name: string; phones: string[] }> {
+export async function groupInfo(chatJid: string, fresh = false): Promise<{ name: string; phones: string[] }> {
   const cached = groups.get(chatJid);
-  if (cached && Date.now() - cached.fetched < 5 * 60_000) return cached;
+  if (!fresh && cached && Date.now() - cached.fetched < 5 * 60_000) return cached;
   const socket = current();
   const meta = await socket.groupMetadata(chatJid).catch(() => undefined);
   const phones: string[] = [];
