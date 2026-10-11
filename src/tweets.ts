@@ -108,7 +108,7 @@ async function call(owner: string, category: "assess" | "write" | "review" | "pr
 }
 const Assessment = z.object({ items: z.array(z.object({ id: z.string(), eligible: z.boolean(),
   fit: z.number().int().min(0).max(5), perspective: z.number().int().min(0).max(5), value: z.number().int().min(0).max(5),
-  support: z.number().int().min(0).max(5), novelty: z.number().int().min(0).max(5), reason: z.string().max(500) })).max(5) });
+  support: z.number().int().min(0).max(5), novelty: z.number().int().min(0).max(5), reason: z.string().transform(text => text.slice(0,500)) })).max(5) });
 export const tweetScore = (item: z.infer<typeof Assessment>["items"][number]) =>
   item.fit * 6 + item.perspective * 5 + item.value * 4 + item.support * 3 + item.novelty * 2;
 async function assess(owner: string, inputs: TweetInput[], deps: TweetDependencies, manual = false): Promise<Source[]> {
@@ -149,7 +149,7 @@ export function validateTweet(raw: string, urls: string[] = []): string {
   return text;
 }
 const Angles = z.object({ angles: z.array(z.string().min(1).max(1500)).min(1).max(2) });
-const Review = z.object({ approved: z.boolean(), text: z.string().max(1500), reason: z.string().max(500), personalEvidence: z.array(z.object({ source: z.string(), quote: z.string().min(1).max(1000) })).max(5) });
+const Review = z.object({ approved: z.boolean(), text: z.string().max(1500), reason: z.string().transform(text => text.slice(0,500)), personalEvidence: z.array(z.object({ source: z.string(), quote: z.string().min(1).max(1000) })).max(5) });
 async function writeDraft(owner: string, sources: Source[], instruction: string, deps: TweetDependencies, manual: boolean, previous?: TweetDraft): Promise<TweetDraft> {
   const now = (deps.now ?? Date.now)(), before = tweetState(owner, now);
   if (!sources.length || sources.some(s => excludedTweetText(s.text))) throw new Error("No eligible source for this draft.");
