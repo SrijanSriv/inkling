@@ -114,7 +114,11 @@ cost is bounded to twice the daily reading limit in model calls, reserved persis
 two calls per preparation attempt, three attempts total, with an hour between failed attempts. Preparation failure
 does not discard the reading note. Shares, preparation state and delivery receipts remain encrypted and backed up.
 
-The main assistant checks the outbox every 15 seconds while connected, waits when the group chat is busy, and
+The main assistant checks the outbox every 15 seconds while connected. Delivery is capped at one attempt per hour
+and the daily reading limit (default ten), including after downtime. An encrypted budget reserves each attempt
+before sending and preserves the hourly gap across midnight and restarts; upgrading also accounts for existing
+sent receipts. Failed or uncertain attempts consume this budget. Queued posts wait rather than arriving in a burst.
+The assistant waits when the group chat is busy, and
 rechecks the configured authorizer's owner registration and live group membership before sending. It sends as the
 assistant, not as a person's linked WhatsApp. Explicit recurring authorization replaces a per-article confirmation.
 No personal history, contacts, email, interest rationale or private memory is passed to the summary model or group.
@@ -143,3 +147,5 @@ Additional validation: 22 isolated sharing checks and 12 personal-memory checks 
 mock send/model functions. They cover exact word counts, authorization changes, owner/group isolation, original
 links, no historical backfill, failure backoff, deduplication and uncertain-send recovery. No test sends to real
 WhatsApp recipients.
+
+Eight isolated delivery-limit checks also cover the hourly gap, persistent cooldown, daily cap and day rollover.

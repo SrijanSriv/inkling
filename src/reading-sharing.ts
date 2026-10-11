@@ -84,18 +84,33 @@ export type ReadingDelivery = { connected: () => boolean; permitted: (group: str
   send: (group: string, text: string, messageId: string) => Promise<void>; now?: () => number };
 export async function deliverReadingShare(deps: ReadingDelivery): Promise<void> {
   const target = settings(); if (!target || !deps.connected()) return;
+  const now = (deps.now ?? Date.now)();
+  const budgetFile = path.join(config.dataDir, "reading", "delivery-budget.json");
+  const dayOf = (time: number) => new Intl.DateTimeFormat("en-CA", {
+    timeZone: process.env.INKLING_READING_TIMEZONE || getUsers().find(u => u.id === target.by)?.timezone || "UTC",
+    year: "numeric", month: "2-digit", day: "2-digit" }).format(time);
+  const day = dayOf(now);
   const candidates = files().map(file => readSealedJson<Share | null>(path.join(directory(), file), null)).filter((s): s is Share => !!s)
     .sort((a,b) => a.readAt - b.readAt);
+  // Preserve already-sent posts when upgrading an installation without a delivery budget.
+  const previous = candidates.filter(s => s.status === "sent" && s.sentAt !== undefined);
+  let budget = readSealedJson(budgetFile, { day, attempts: previous.filter(s => dayOf(s.sentAt!) === day).length,
+    lastAttempt: Math.max(0, ...previous.map(s => s.sentAt!)) });
+  if (budget.day !== day) budget = { day, attempts: 0, lastAttempt: budget.lastAttempt };
+  const dailyLimit = Math.max(1, Math.min(50, Number(process.env.INKLING_READING_DAILY) || 10));
   for (const share of candidates) {
     if (share.status === "sending") {
       // A crash may have occurred after WhatsApp accepted the message. Don't blindly send a duplicate.
       share.status = "uncertain"; writeSealedJson(fileFor(share.id), share); log.warn("reading share delivery uncertain");
     }
     if (share.status !== "ready" || share.group !== target.group || share.by !== target.by || share.readAt < target.since) continue;
+    // Offline catch-up must not turn hourly reading into a burst of group messages.
+    if (budget.attempts >= dailyLimit || now - budget.lastAttempt < 3_600_000) return;
     if ((deps.now ?? Date.now)() - share.created > 180 * DAY || !share.summary) continue;
     const summary = validateReadingSummary(share.summary);
     if (!(await deps.permitted(share.group, share.by)) || !deps.connected()) return;
     const text = `${summary}${share.partial ? "\n\nBased on a partial read." : ""}\n\n${share.url}`;
+    budget.attempts++; budget.lastAttempt = now; writeSealedJson(budgetFile, budget);
     share.status = "sending"; writeSealedJson(fileFor(share.id), share);
     try {
       await deps.send(share.group, text, `3EB0${share.id.slice(0, 28).toUpperCase()}`);
