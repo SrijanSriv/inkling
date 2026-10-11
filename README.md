@@ -627,3 +627,10 @@ Older workers reject the new reconciliation operations, so the Pi keeps uncertai
 them unsafely. New state stays in the existing data directory and is included in normal backups.
 
 See [the v1 plan](docs/memory-v1-plan.md) for scope, evidence, limitations and validation.
+
+### Background reading (optional, intake only)
+
+A separate low-priority worker can check public RSS/Atom feeds, read selected articles and save encrypted,
+source-linked notes. It uses direct text extraction on the host and the optional remote browser as a fallback.
+Daily limits, duplicate tracking and retry state survive restarts. It sends no WhatsApp messages or digests,
+and does not change personal memory. Off by default; see [reading intake setup and limits](docs/reading-intake.md).

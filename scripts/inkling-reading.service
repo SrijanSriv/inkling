@@ -1,0 +1,21 @@
+# User service template: adjust WorkingDirectory and PATH for your host.
+[Unit]
+Description=Inkling public article intake (no messaging)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/inkling
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/env node --import tsx src/reading-worker.ts
+Restart=on-failure
+RestartSec=30
+TimeoutStopSec=180
+Nice=10
+MemoryHigh=256M
+MemoryMax=384M
+UMask=0077
+
+[Install]
+WantedBy=default.target

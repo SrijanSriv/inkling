@@ -28,7 +28,7 @@ function isPrivate(ip: string): boolean {
   );
 }
 
-async function assertPublic(url: URL): Promise<void> {
+export async function assertPublic(url: URL): Promise<void> {
   if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error("Only http and https links can be opened.");
   if (url.username || url.password) throw new Error("Links with passwords in them can't be opened.");
   const host = url.hostname.replace(/^\[|\]$/g, "");

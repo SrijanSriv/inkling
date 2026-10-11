@@ -50,6 +50,10 @@ class Boundaries(unittest.TestCase):
 
 
 class DeploymentRollback(unittest.TestCase):
+    def test_intake_resumes_on_rollback(self):
+        self.reading_service = 'reading-fixture.service'
+        self.test_failed_health_rolls_back_without_changing_checkout()
+
     def test_failed_health_rolls_back_without_changing_checkout(self):
         import deploy
         with tempfile.TemporaryDirectory() as d:
@@ -76,12 +80,17 @@ class DeploymentRollback(unittest.TestCase):
                 if args[0] in ['npm','fake-node','systemctl','curl']: return subprocess.CompletedProcess(args,0,'','')
                 return real_run(args,**kw)
             c={'state':str(base/'state'),'checkout':str(root),'branch':'master','releases':str(releases),'tool_path':'/usr/bin:/bin','data':str(root/'data'),'node':'fake-node','service':'fake.service','health_url':'unused'}
+            if getattr(self, 'reading_service', None):
+                c['reading_service'] = self.reading_service
             with patch('deploy.run',side_effect=fake),patch('deploy.healthy',side_effect=[False,True]),patch('deploy.snapshot') as backup,patch('deploy.notify'):
                 with self.assertRaises(RuntimeError): deploy.main(c)
             self.assertEqual((releases/'current').resolve(),root.resolve())
             self.assertEqual(git('rev-parse','HEAD'),old)
             self.assertTrue(json.loads((base/'state/deploy.json').read_text())['rollbackHealthy'])
             self.assertEqual(sum(args[:3]==['systemctl','--user','restart'] for args in calls),2)
+            if c.get('reading_service'):
+                self.assertEqual(sum(args==['systemctl','--user','stop',c['reading_service']] for args in calls),1)
+                self.assertEqual(sum(args==['systemctl','--user','start',c['reading_service']] for args in calls),1)
             backup.assert_called_once()
 
 

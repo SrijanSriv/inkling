@@ -15,5 +15,6 @@
   "backup_repository": "/path/to/private/operations-state/backups",
   "backup_password": "/path/to/private/restic-password",
   "laptop_ssh": "user@backup-host",
-  "laptop_state": "/path/to/private/laptop-operations-state"
+  "laptop_state": "/path/to/private/laptop-operations-state",
+  "reading_service": "inkling-reading.service"
 }

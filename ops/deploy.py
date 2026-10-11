@@ -69,6 +69,7 @@ def main(c):
         candidate.mkdir(mode=0o700)
         archive=state/'deploy-source.tar'
         switched=False
+        reading_paused=False
         try:
             run(['git','archive','--format=tar','-o',archive,sha],cwd=root)
             with tarfile.open(archive) as tar:
@@ -88,6 +89,10 @@ def main(c):
             (candidate/'.env').symlink_to(root/'.env')
             (candidate/'data').symlink_to(c['data'],target_is_directory=True)
             atomic(candidate/'version.json',{'sha':sha})
+            # Intake must finish its current write before switching versions of its state readers.
+            if c.get('reading_service') and run(['systemctl','--user','is-active','--quiet',c['reading_service']],check=False).returncode==0:
+                reading_paused=True
+                run(['systemctl','--user','stop',c['reading_service']],timeout=200)
             point(current,candidate)
             switched=True
             if music_changed:
@@ -95,6 +100,8 @@ def main(c):
             run(['systemctl','--user','restart',c['service']],timeout=90)
             if not healthy(c,sha):
                 raise RuntimeError('New release did not reconnect WhatsApp')
+            if reading_paused:
+                run(['systemctl','--user','start',c['reading_service']],timeout=30)
             run(['git','merge','--ff-only',sha],cwd=root)
             atomic(state/'deploy.json',{'live':sha,'previous':prior_sha,'at':dt.datetime.now(dt.timezone.utc).isoformat()})
             notify(c,'deploy-'+sha,'GitHub update is live on the Pi ('+sha[:7]+'). Code checks passed and WhatsApp reconnected. A recovery backup was made before the update.')
@@ -112,8 +119,12 @@ def main(c):
                 if music_changed:
                     run(['systemctl','--user','restart',c['music_service']],timeout=100,check=False)
                 run(['systemctl','--user','restart',c['service']],timeout=90)
+                if reading_paused:
+                    run(['systemctl','--user','start',c['reading_service']],timeout=30,check=False)
                 rolled_back=healthy(c,prior_sha) if prior_sha!='dev' else run(['curl','-fsS','--max-time','10',c['health_url']],check=False).returncode==0
             else:
+                if reading_paused:
+                    run(['systemctl','--user','start',c['reading_service']],timeout=30,check=False)
                 rolled_back=True
             atomic(state/'deploy.json',{'failed':sha,'previous':prior_sha,'rollbackHealthy':rolled_back,'at':dt.datetime.now(dt.timezone.utc).isoformat()})
             notify(c,'deploy-failed-'+sha,'GitHub update '+sha[:7]+' failed its checks. '+('The previous version is running.' if rolled_back else 'The previous version also needs attention; check the Pi.')+' Automatic retries for this revision are paused.')
