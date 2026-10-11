@@ -1,3 +1,4 @@
+import { captureTweetInput } from "./tweets.js";
 import { createHash, randomUUID } from "node:crypto";
 import type OpenAI from "openai";
 import { responses, tuned } from "./ai.js";
@@ -138,6 +139,7 @@ export async function runLinkWorkflow(chat: string, actor: string, message: stri
     if (!(await valid())) { finish("failed"); return; }
     // List insertion has its own source ID, covering a crash between insertion and receipt commit.
     addLinkItem(chat, rule.list, receipt.item!, actor, receipt.id);
+    if (chat === actor) captureTweetInput(actor, { id: `link:${receipt.id}`, kind: "link", text: receipt.item!, url, at: receipt.at });
     finish("done");
     appendHistory(chat, [{ role: "user", content: text }, { role: "assistant", content: receipt.reply! }]);
     log.info({ chat, outcome: "saved" }, "link workflow");

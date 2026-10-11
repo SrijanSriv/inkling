@@ -637,3 +637,12 @@ sharing posts a 50-word summary and source link to one explicitly configured gro
 connection. Optional owner-only article memory is searchable through recall in that owner's private chat,
 without filling their always-loaded personal notes. All three features are off by default; see
 [reading setup, sharing and memory](docs/reading-intake.md).
+
+### Private tweet drafts (optional)
+
+The configured owner can get up to two ready-to-copy tweets daily, drawn from eligible personal thoughts, personal
+projects and public article notes. Employment and workplace material, private inboxes and group history are
+excluded. Suggestions are sent privately, at least four hours apart, and only when the idea clears the editorial
+threshold. Reply to the tweet bubble to revise or reject it, or ask for a draft directly. The entire tweet is one
+plain-text message. You copy and publish it yourself; no X account connection or API fee. Existing AI usage still
+applies. See [setup, budgets and privacy](docs/tweeting.md) and [the design proposal](docs/tweeting-v1-proposal.md).

@@ -7,7 +7,7 @@ import { readSealedJson, writeSealedJson } from "./vault.js";
 // between users: history, memory and connector sessions are all keyed by user id.
 
 /** Saved conversation turns. Text only: tool calls and search results stay inside the turn that made them. */
-export type Turn = { role: "user" | "assistant"; content: string };
+export type Turn = { role: "user" | "assistant"; content: string; sourceIds?: string[] };
 
 const MAX_TURNS = 60;
 const TRIM_TO = 40; // trim in chunks so the cached prompt prefix stays stable between trims

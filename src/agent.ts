@@ -1,3 +1,4 @@
+import { captureTweetInput, controlTweet, resetTweetMemory, tweetActionFor, tweetConfirmationAmbiguous, tweetErrorMessage, tweetsEnabled, tweetTools } from "./tweets.js";
 import { configureLinkWorkflow, linkWorkflowTools } from "./link-workflow.js";
 import { rawMusicReply, missingMusicDetails } from "./music-replies.js";
 import { codingEnabled, codingQuestions, codingTools, controlCoding } from "./coding.js";
@@ -96,6 +97,7 @@ function ackEmoji(tool: string): string {
 
 export type Incoming = {
   requestId?: string;
+  replyToId?: string;
   /** Who sent it (shown to the model in group chats). */
   from?: string;
   text: string;
@@ -126,6 +128,8 @@ export type ChatActions = {
   setGroupOpen(open: boolean): void;
   /** Sends one message to this chat right away (used for recommendations, one option per message). */
   send(text: string): Promise<void>;
+  /** One intact plain-text tweet bubble, with a stable delivery ID. */
+  sendTweet?(text: string, id: string): Promise<void>;
   /** Sends one message to the person's own private chat with the assistant (confirmations asked for in a group). */
   sendPrivate(text: string): Promise<void>;
   sendImage(image: Buffer, caption?: string): Promise<void>;
@@ -908,9 +912,24 @@ export async function respond(chat: Chat, batch: Incoming[], actions: ChatAction
   const { user, group } = chat;
   const turn = startTurn(user.id, chat.id, !!group);
 
+  if (!group && tweetsEnabled(user.id, chat.id) && batch.length === 1 && !batch[0].images.length && !batch[0].text.startsWith("(automatic")) {
+    const incoming = batch[0];
+    const action = tweetActionFor(user.id, incoming.text, incoming.replyToId);
+    if (action) {
+      appendHistory(chat.id, [{ role: "user", content: incoming.text }]);
+      try {
+        const result = await controlTweet(user.id, chat.id, action, incoming.text, undefined, incoming.replyToId,
+          { send: (text,id) => actions.sendTweet ? actions.sendTweet(text,id) : actions.send(text) });
+        if (result.text) appendHistory(chat.id,[{role:"assistant",content:result.text}]);
+        return result.text;
+      } catch (error) { log.warn("tweet editor request failed"); return tweetErrorMessage(error); }
+    }
+  }
+
   // A plain "yes" to something waiting for one is done here, by code: the model can't re-word it or claim it's done.
   const waiting = !group && batch.length === 1 && !batch[0].images.length ? drafts.get(user.id) : undefined;
   if (waiting && PLAIN_YES.test(batch[0].text) && waiting.createdAt < turnStart && !draftExpired(waiting)) {
+    if (tweetsEnabled(user.id, chat.id) && tweetConfirmationAmbiguous(user.id)) return "There is a tweet suggestion and another action waiting. Please name the email, invite or browser action you want confirmed. Tweets are copy-and-paste only.";
     if (user.owner && codingEnabled()) {
       try {
         const questions = await codingQuestions(user.id);
@@ -950,6 +969,7 @@ export async function respond(chat: Chat, batch: Incoming[], actions: ChatAction
       ? [{ type: "web_search" as const, user_location: { type: "approximate" as const, timezone: user.timezone, ...(user.city && { city: user.city }) } }]
       : []),
     ...ownTools,
+    ...(!group && tweetsEnabled(user.id, chat.id) ? tweetTools : []),
     ...(!group && user.owner && !guest && codingEnabled() ? codingTools : []),
     ...((group || (user.owner && !guest)) && musicEnabled() ? musicTools : []),
     ...(accounts.some((a) => a.gmail) ? gmailTools : []),
@@ -980,7 +1000,7 @@ export async function respond(chat: Chat, batch: Incoming[], actions: ChatAction
     ...(group && user.admin ? [groupAccessTool] : []),
   ];
   // Built once per turn so it stays identical across every step (and cacheable).
-  const system = instructions(chat, memory, canSearch);
+  const system = instructions(chat, memory, canSearch) + (tweetsEnabled(user.id, chat.id) && !group ? "\n- Tweet drafting: use tweet_editor for private copy-and-paste tweets. No X publishing is available. Never route tweet approval to confirm_send. Drafting uses only eligible personal/public material, never employment or private inboxes/coding transcripts. After the tool sends a tweet bubble, reply with nothing." : "");
 
   const stamp = (at: Date) =>
     at.toLocaleString("en-GB", { timeZone: user.timezone, dateStyle: "full", timeStyle: "short" });
@@ -1086,7 +1106,7 @@ export async function respond(chat: Chat, batch: Incoming[], actions: ChatAction
             }
           }
           const out = offeredTools.has(call.name)
-            ? await runTool(chat, call, conversation, messages, actions, did, ack, images, turnStart, musicKey, !batch.some(m => m.text.startsWith("(automatic")))
+            ? await runTool(chat, call, conversation, messages, actions, did, ack, images, turnStart, musicKey, !batch.some(m => m.text.startsWith("(automatic")), batch.at(-1)?.replyToId)
             : { type: "function_call_output" as const, call_id: call.call_id, output: "Error: That tool is not available to this sender in this chat." };
           const result = { name: call.name, output: typeof out.output === "string" ? out.output : JSON.stringify(out.output) };
           toolResults.push(result);
@@ -1172,9 +1192,12 @@ export async function respond(chat: Chat, batch: Incoming[], actions: ChatAction
   const saved = images.length ? `${userText}\n[sent ${images.length} photo${images.length > 1 ? "s" : ""}]` : userText;
   endTurn(turn, { tools: toolCount, photos: images.length, replied: !!reply });
   archived(chat, appendHistory(chat.id, [
-    { role: "user", content: saved },
+    { role: "user", content: saved, sourceIds: batch.map(m => m.requestId || `at-${m.at.getTime()}`) },
     { role: "assistant", content: [reply, ...did.map((d) => `(${d})`)].filter(Boolean).join("\n") },
   ]));
+  if (!group && tweetsEnabled(user.id, chat.id) && !automatic) for (const incoming of batch) {
+    if (!incoming.images.length) captureTweetInput(user.id, { id: incoming.requestId || `at-${incoming.at.getTime()}`, kind: "owner", text: incoming.text, at: incoming.at.getTime() });
+  }
   return reply;
 }
 
@@ -1190,6 +1213,7 @@ async function runTool(
   turnStart: number,
   musicRequestKey?: string,
   humanTurn = true,
+  replyToId?: string,
 ): Promise<OpenAI.Responses.ResponseInputItem.FunctionCallOutput> {
   const output = (text: string) => ({ type: "function_call_output" as const, call_id: call.call_id, output: text });
 
@@ -1255,6 +1279,15 @@ async function runTool(
     const args = JSON.parse(call.arguments || "{}") as Record<string, unknown>;
     log.info({ chat: chat.id, tool: call.name }, "tool");
     switch (call.name) {
+      case "tweet_editor": {
+        if (!humanTurn || chat.group || !tweetsEnabled(chat.user.id,chat.id)) return output("Error: Tweet editor requires the configured owner's private human request.");
+        let result;
+        try { result = await controlTweet(chat.user.id,chat.id,String(args.action),said,typeof args.id === "string" ? args.id : undefined,replyToId,
+          {send:(text,id)=>actions.sendTweet ? actions.sendTweet(text,id) : actions.send(text)}); }
+        catch (error) { log.warn("tweet editor request failed"); return output(tweetErrorMessage(error)); }
+        if (result.delivered) did.push("sent a copyable tweet draft privately, not published to X");
+        return output(result.delivered ? "The exact tweet was delivered as one plain-text bubble. Reply with nothing. Nothing was published to X." : result.text);
+      }
       case "coding_pending": case "coding_resume": case "coding_cancel_pending": case "coding_projects": case "coding_start": case "coding_status": case "coding_diff": case "coding_continue": case "coding_cancel": case "coding_artifacts": {
         if (chat.group || !getUsers().some(u => u.id === chat.user.id && u.owner) || isGuest(chat.user) || !codingEnabled()) return output("Error: Coding is available only to the owner in private chat when configured.");
         if ((call.name === "coding_cancel" || call.name === "coding_cancel_pending") && !/\b(stop|cancel|abort|band|rok|roko)\b/i.test(said)) return output("Error: Only cancel coding when the owner asks to stop it.");
@@ -1290,7 +1323,7 @@ async function runTool(
         const after = before.filter((n) => !drop.has(n));
         saveMemory(chat.id, after);
         // The copy kept from before the last tidy could still have it, so forgetting clears that too.
-        if (after.length < before.length) clearTidyBackup(chat.id);
+        if (after.length < before.length) { clearTidyBackup(chat.id); resetTweetMemory(chat.id); }
         return output(`Deleted ${before.length - after.length} note(s).`);
       }
       case "recall":
@@ -1441,6 +1474,7 @@ async function runTool(
         if (chat.group) return output("Not available here.");
         if (/\bC\d+\b/i.test(said)) return output("That refers to a coding job. Use coding_continue for its answer; do not confirm an unrelated draft.");
         const uid = chat.user.id;
+        if (tweetsEnabled(uid,chat.id) && (/\b(?:tweet|twitter|T\d+)\b/i.test(said) || (tweetConfirmationAmbiguous(uid) && !/\b(?:email|mail|invite|browser|booking|whatsapp)\b/i.test(said)))) return output("Error: Tweet feedback cannot confirm another outgoing action. Name that action explicitly. Tweets are posted manually.");
         const draft = drafts.get(uid);
         if (!draft) return output("There's nothing drafted. Draft it again.");
         if (draft.createdAt >= turnStart || draftExpired(draft)) return output("They haven't confirmed yet. Show them the draft and wait for their yes.");
@@ -1565,7 +1599,11 @@ async function runTool(
         return output("Poll sent. People vote in WhatsApp; you won't see the votes.");
       }
     }
-    if (call.name.startsWith("list_")) return output(handleList(call.name, args, chat.id, chat.user.name));
+    if (call.name.startsWith("list_")) {
+      const result = handleList(call.name, args, chat.id, chat.user.name);
+      if (call.name === "list_update" && !result.startsWith("No list called") && (args.clear_ticked || (Array.isArray(args.remove) && args.remove.length))) resetTweetMemory(chat.id);
+      return output(result);
+    }
     if (call.name.startsWith("date_")) return output(handleDate(call.name, args, chat.id, toWallTime(new Date(), chat.user.timezone).slice(0, 10)));
     if (call.name.startsWith("watch_")) return output(handleWatch(call.name, args, chat.id, chat.user.name));
     if (call.name.startsWith("travel_") && !chat.group) return output(handleTravel(call.name, args, chat.user.id, chat.user.timezone));

@@ -37,7 +37,7 @@ export interface ResponseStream {
   finalResponse(): Promise<OpenAI.Responses.Response>;
 }
 export interface Responses {
-  create(params: ResponseParams): Promise<OpenAI.Responses.Response>;
+  create(params: ResponseParams, options?: { timeout?: number; maxRetries?: number; signal?: AbortSignal }): Promise<OpenAI.Responses.Response>;
   stream(params: ResponseParams): ResponseStream;
 }
 
@@ -45,7 +45,7 @@ export interface Responses {
 export function responses(): Responses {
   if (config.provider === "anthropic") return claudeResponses();
   return {
-    create: (params) => ai().responses.create({ ...params, stream: false }),
+    create: (params, options) => ai().responses.create({ ...params, stream: false }, options),
     stream: (params) => {
       const stream = ai().responses.stream(params as OpenAI.Responses.ResponseCreateParamsStreaming);
       return {

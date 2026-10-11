@@ -1,3 +1,4 @@
+import { resetTweetMemory, startTweetEditor, tweetsEnabled } from "./tweets.js";
 import { linkWorkflowCandidate, reserveLink, runLinkWorkflow } from "./link-workflow.js";
 import { startCodingNotifications } from "./coding.js";
 import { config, findUserByPhone, getUsers, phonesOf, type User } from "./config.js";
@@ -264,6 +265,7 @@ function chatActions(chat: Chat, chatJid: string, key?: WAMessageKey): ChatActio
     pollResults: () => pollResults(chatJid),
     peopleChanged: () => void answerWaiting(),
     send: (text) => sendText(chatJid, text),
+    sendTweet: (text,id) => sendText(chatJid,text,id),
     sendPrivate: (text) => sendText(`${user.phone}@s.whatsapp.net`, text),
     sendImage: (image, caption) => sendImage(chatJid, image, caption),
     sendDocument: (data, filename) => sendDocument(chatJid, data, filename),
@@ -360,6 +362,7 @@ async function runCommand(chat: Chat, chatJid: string, command: string): Promise
           ].join("\n");
     case "/reset":
       clearHistory(chat.id);
+      resetTweetMemory(chat.id);
       return "Fresh start. I still remember the saved notes (/memory shows them).";
     case "/memory": {
       const notes = loadMemory(chat.id);
@@ -458,6 +461,17 @@ startMemoryUpkeep();
 const owner = getUsers().find((u) => u.owner);
 if (owner) startCodingNotifications(owner.id, notifyPerson(owner), () => link.connected);
 if (owner) startOperationNotifications(owner.id, notifyPerson(owner), () => link.connected);
+startTweetEditor({
+  available: () => {
+    const id=process.env.INKLING_TWEETS_USER_ID;
+    return !!id && tweetsEnabled(id) && link.connected && !handingOver && ![...queues.values()].some(q=>q.busy || q.pending.length);
+  },
+  sendToOwner: async (id,text,messageId) => {
+    const current=getUsers().find(u=>u.id===id&&u.owner);
+    if(!current || !tweetsEnabled(id) || !link.connected || handingOver) throw new Error("Tweet delivery paused");
+    await sendText(`${current.phone}@s.whatsapp.net`,text,messageId);
+  },
+});
 startReadingNotifications({
   connected: () => link.connected && !handingOver,
   permitted: async (group, by) => {

@@ -230,6 +230,7 @@ async function parse(socket: WASocket, m: WAMessage): Promise<InboundMessage | u
     group,
     key: m.key,
     at: new Date(Number(m.messageTimestamp ?? Date.now() / 1000) * 1000),
+    replyToId: ctx?.stanzaId ?? undefined,
     text: body || (images.length ? "" : "(sent something I can't open yet, like a sticker or file)"),
     images,
   };

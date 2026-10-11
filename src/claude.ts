@@ -206,8 +206,8 @@ async function untilDone(body: Body, step: (body: Body) => Promise<Anthropic.Bet
 
 export function claudeResponses(): Responses {
   return {
-    create: async (params) => {
-      const steps = await untilDone(bodyOf(params, CREATE_MAX_TOKENS), (body) => anthropic().beta.messages.create(body));
+    create: async (params, options) => {
+      const steps = await untilDone(bodyOf(params, CREATE_MAX_TOKENS), (body) => anthropic().beta.messages.create(body, options));
       return responseOf(String(params.model), steps);
     },
     stream: (params): ResponseStream => {
