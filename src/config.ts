@@ -25,6 +25,9 @@ export const config = {
   // Model names (on Azure, deployment names; by default a deployment is named after its model).
   model: process.env.INKLING_MODEL ?? (provider === "anthropic" ? "claude-opus-5-5" : "gpt-5-mini"),
   transcribeModel: process.env.INKLING_TRANSCRIBE_MODEL ?? "gpt-4o-transcribe",
+  whisperUrl: process.env.INKLING_WHISPER_URL || undefined,
+  whisperSecret: process.env.INKLING_WHISPER_SECRET || undefined,
+  voiceReplies: process.env.INKLING_VOICE_REPLIES ?? (process.env.INKLING_WHISPER_URL ? "text" : "auto"),
   ttsModel: process.env.INKLING_TTS_MODEL ?? "gpt-4o-mini-tts",
   // Unset: FLUX.1-Kontext-pro on Azure, gpt-image-1 on OpenAI (images.ts).
   imageModel: process.env.INKLING_IMAGE_MODEL || undefined,

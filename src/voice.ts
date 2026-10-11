@@ -2,6 +2,7 @@ import OpenAI, { AzureOpenAI, toFile } from "openai";
 import { media } from "./ai.js";
 import { config } from "./config.js";
 import { log } from "./log.js";
+import { VoiceInputError } from "./voice-intake.js";
 
 // Voice notes in (transcription) and out (spoken urgent reminders), with Azure or OpenAI audio models: the same
 // account as the chat models, or, with Claude (no speech API), Azure or OpenAI keys set alongside (ai.ts media()).
@@ -75,8 +76,27 @@ async function speakModel(text: string): Promise<Buffer> {
   return Buffer.from(await res.arrayBuffer());
 }
 
-/** Turns a WhatsApp voice note (Ogg/Opus) into text (gpt-4o-transcribe by default). */
+/** Local Whisper when configured, otherwise the existing cloud transcription provider. */
 export async function transcribe(sound: Buffer, mimeType: string, language?: string): Promise<string> {
+  if (sound.length > 12 * 1024 * 1024) throw new VoiceInputError("too_long");
+  if (config.whisperUrl) {
+    if (!config.whisperSecret) throw new VoiceInputError("unavailable");
+    try {
+      const res = await fetch(new URL("/transcribe", config.whisperUrl), {
+        method: "POST", headers: { authorization: `Bearer ${config.whisperSecret}`, "content-type": "application/octet-stream" },
+        body: new Uint8Array(sound), signal: AbortSignal.timeout(190_000),
+      });
+      if (!res.ok) throw new VoiceInputError(res.status===413 ? "too_long" : res.status===422 ? "unclear" : res.status===429 ? "busy" : "unavailable");
+      const raw = await res.text();
+      if (raw.length > 64_000) throw new VoiceInputError("unclear");
+      const result = JSON.parse(raw);
+      if (typeof result.text !== "string" || !result.text.trim() || result.text.length > 16_000) throw new VoiceInputError("unclear");
+      return result.text.trim();
+    } catch (error) {
+      if (error instanceof VoiceInputError) throw error;
+      throw new VoiceInputError("unavailable");
+    }
+  }
   const type = mimeType.split(";")[0] || "audio/ogg";
   const ext = type.split("/")[1]?.replace("mpeg", "mp3") ?? "ogg";
   const hint = language ? (hints[language.toLowerCase()] ?? `The speaker usually speaks ${language}.`) : undefined;

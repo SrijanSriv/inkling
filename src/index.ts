@@ -13,10 +13,11 @@ import { addReminder, cancelReminder, listReminders, startReminders } from "./re
 import { clearHistory, encryptStoredChats, groupOpen, loadMemory, setGroupOpen } from "./store.js";
 import { bubbles } from "./text.js";
 import { adminLink, startWeb } from "./web.js";
-import { botPhone, groupInfo, link, markRead, releaseWhatsApp, nameCall, react, resendMedia, sendImage, sendDocument, sendPoll, sendText, sendVoiceNote, setPersonLookup, showTyping, startWhatsApp, type InboundMessage } from "./whatsapp.js";
+import { botPhone, groupInfo, link, markRead, releaseWhatsApp, nameCall, react, resendMedia, sendImage, sendDocument, sendPoll, sendText, sendVoiceNote, setPersonLookup, setAudioAccess, showTyping, startWhatsApp, type InboundMessage } from "./whatsapp.js";
 import { startOperationNotifications } from "./operations.js";
 import { startReadingNotifications } from "./reading-sharing.js";
 import { speak } from "./voice.js";
+import { voiceErrorText } from "./voice-intake.js";
 import { startScheduler, type RunJob } from "./schedule.js";
 import { startChanges } from "./changes.js";
 import { startMemoryUpkeep } from "./memory.js";
@@ -65,7 +66,7 @@ function onMessage(msg: InboundMessage): void {
 
   // Auto-replies fire on every message in a chat that has them (groups: anyone's message, addressed or not).
   const chatId = msg.group ? groupId(msg.chatJid) : user?.id;
-  const auto = chatId ? autoReplyFor(chatId, msg.text) : undefined;
+  const auto = chatId && !msg.audioError ? autoReplyFor(chatId, msg.text) : undefined;
   if (auto) {
     const sent = auto.photo ? sendImage(msg.chatJid, auto.photo, auto.text) : sendText(msg.chatJid, auto.text ?? "");
     sent.catch((err) => log.warn({ err }, "couldn't send an auto-reply"));
@@ -170,6 +171,13 @@ async function drain(key: string, queue: { busy: boolean; pending: Queued[] }): 
   while (queue.pending.length && !handingOver) {
     // Workflow entries use the same serial chat queue, but never mix with human requests.
     const first = queue.pending[0];
+    if (first.msg.audioError) {
+      queue.pending.shift();
+      startedPending([first.msg]);
+      try { await sendReply(first.msg.chatJid, voiceErrorText(first.msg.audioError)); }
+      catch { log.warn("voice failure notice could not be sent"); }
+      continue;
+    }
     if (first.workflow) {
       queue.pending.shift();
       const { msg, user } = first;
@@ -184,7 +192,7 @@ async function drain(key: string, queue: { busy: boolean; pending: Queued[] }): 
       finally { startedPending([msg]); }
       continue;
     }
-    const boundary = queue.pending.findIndex(item => item.workflow);
+    const boundary = queue.pending.findIndex(item => item.workflow || item.msg.audioError);
     const batch = queue.pending.splice(0, boundary < 0 ? queue.pending.length : boundary);
     startedPending(batch.map((b) => b.msg));
     const { msg: last, user } = batch.at(-1)!;
@@ -210,10 +218,9 @@ async function drain(key: string, queue: { busy: boolean; pending: Queued[] }): 
       const incoming: Incoming[] = batch.map(({ msg, user }) => ({ ...msg, requestId: msg.key.id || undefined, from: user.name }));
       const reply = await respond(chat, incoming, chatActions(chat, chatJid, last.key));
       stopTyping();
-      // Spoken to, it speaks back: with ElevenLabs set up, a short reply to a voice note comes as a voice note. Replies
-      // with links or several parts stay as text, since those don't work out loud.
+      // Local transcription uses text replies. Legacy cloud mode may still speak short replies when configured.
       let spoken = false;
-      if (config.elevenLabsKey && last.text.startsWith("(voice note)") && speakable(reply)) {
+      if (config.voiceReplies !== "text" && config.elevenLabsKey && last.text.startsWith("(voice note)") && speakable(reply)) {
         const sound = await speak(reply).catch((err) => log.warn({ err }, "couldn't speak the reply"));
         if (sound) {
           await sendVoiceNote(chatJid, sound);
@@ -450,6 +457,11 @@ startAnalytics();
 // Send the last few usage events before stopping (hosts send SIGTERM on restarts and deploys).
 for (const signal of ["SIGTERM", "SIGINT"] as const) process.once(signal, () => void stopAnalytics().finally(() => process.exit(0)));
 setPersonLookup((phone) => (phone ? findUserByPhone(phone) : undefined));
+setAudioAccess(async (phone, chat, group) => {
+  if (!phone || isDeclined(phone)) return false;
+  if (findUserByPhone(phone)) return true;
+  return group ? groupIsOpen(chat) : config.guestMessages > 0;
+});
 setBotPhone(botPhone);
 startPersonalWorker(async (userId, text) => {
   const user = getUsers().find((u) => u.id === userId);

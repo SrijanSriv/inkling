@@ -98,6 +98,8 @@ function ackEmoji(tool: string): string {
 export type Incoming = {
   requestId?: string;
   replyToId?: string;
+  audioOrigin?: boolean;
+  audioError?: "busy" | "too_long" | "unclear" | "unavailable";
   /** Who sent it (shown to the model in group chats). */
   from?: string;
   text: string;

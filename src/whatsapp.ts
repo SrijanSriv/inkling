@@ -27,6 +27,7 @@ import { baileysLog, log } from "./log.js";
 import { describeLocation } from "./location.js";
 import { recordVote, rememberPoll } from "./polls.js";
 import { transcribe } from "./voice.js";
+import { queueVoice, VoiceInputError } from "./voice-intake.js";
 
 // inkling links to WhatsApp as a "linked device", the same way WhatsApp Web does.
 
@@ -43,6 +44,10 @@ export type InboundMessage = Incoming & {
 };
 export type OnMessage = (msg: InboundMessage) => void;
 export type OnConnected = () => void;
+let allowAudio: (phone: string | undefined, chat: string, group: boolean) => Promise<boolean> = async phone => !!person(phone);
+export function setAudioAccess(check: typeof allowAudio): void { allowAudio = check; }
+const intake = new Map<string, Promise<void>>();
+const intakeIds = new Set<string>();
 
 const IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
 
@@ -113,9 +118,21 @@ export async function startWhatsApp(onMessage: OnMessage, onConnected?: OnConnec
     if (type !== "notify" && type !== "append") return;
     for (const m of messages) {
       if (type === "append" && !recent(m)) continue;
-      parse(socket, m)
-        .then((msg) => msg && onMessage(msg))
-        .catch((err) => log.error({ err }, "failed to read incoming message"));
+      const chat = m.key.remoteJid;
+      if (!chat) continue;
+      const id = m.key.id ? `${chat}:${m.key.id}` : undefined;
+      if (id && intakeIds.has(id)) continue;
+      if (id) {
+        intakeIds.add(id);
+        if (intakeIds.size > 5000) intakeIds.delete(intakeIds.values().next().value!);
+      }
+      // Preserve chat order while slow audio leaves other chats free to proceed.
+      const next = (intake.get(chat) || Promise.resolve()).then(async () => {
+        const msg = await parse(socket, m);
+        if (msg) onMessage(msg);
+      }).catch(() => { log.warn("failed to read incoming message"); });
+      intake.set(chat, next);
+      void next.finally(() => { if (intake.get(chat) === next) intake.delete(chat); });
     }
   });
 }
@@ -152,7 +169,34 @@ async function parse(socket: WASocket, m: WAMessage): Promise<InboundMessage | u
   const ctx = content?.extendedTextMessage?.contextInfo ?? content?.imageMessage?.contextInfo ?? content?.audioMessage?.contextInfo;
   // Voice notes are heard first, even in groups: saying the name has to work like typing it, and what was said is
   // context like any other message.
-  const spoken = content?.audioMessage ? await hear(socket, m, content.audioMessage.mimetype, phone) : "";
+  const audio = content?.audioMessage;
+  let spoken = "", audioError: Incoming["audioError"];
+  if (audio) {
+    if (await allowAudio(phone, chatJid, !!isGroup)) {
+      try {
+        spoken = await queueVoice(phone || chatJid, async () => {
+          if (!(await allowAudio(phone, chatJid, !!isGroup))) throw new VoiceInputError("unavailable");
+          if (Number(audio.seconds) > 120 || Number(audio.fileLength) > 12 * 1024 * 1024) throw new VoiceInputError("too_long");
+          const stream = await downloadMediaMessage(m, "stream", {}, { logger: baileysLog, reuploadRequest: socket.updateMediaMessage });
+          const timeout = setTimeout(() => stream.destroy(new Error("Audio download timeout")), 30_000);
+          const chunks: Buffer[] = [];
+          let size = 0;
+          try {
+            for await (const chunk of stream) {
+              const b = Buffer.from(chunk);
+              size += b.length;
+              if (size > 12 * 1024 * 1024) { stream.destroy(); throw new VoiceInputError("too_long"); }
+              chunks.push(b);
+            }
+          } finally { clearTimeout(timeout); }
+          return `(voice note) ${await transcribe(Buffer.concat(chunks), audio.mimetype || "audio/ogg", person(phone)?.language)}`;
+        });
+      } catch (error) {
+        audioError = error instanceof VoiceInputError ? error.kind : "unavailable";
+        log.warn("voice transcription failed");
+      }
+    } else spoken = "(sent a voice note)";
+  }
   let group: InboundMessage["group"];
   if (isGroup) {
     const me = new Set([socket.user?.id, socket.user?.lid].filter(Boolean).map((j) => jidNormalizedUser(j!)));
@@ -163,6 +207,7 @@ async function parse(socket: WASocket, m: WAMessage): Promise<InboundMessage | u
       (!!ctx?.participant && me.has(jidNormalizedUser(ctx.participant)));
     group = { addressed };
     // Messages not meant for the assistant are only kept as short-term context, so skip downloading anything else.
+    if (!addressed && audioError) return;
     if (!addressed) return { chatJid, phone, senderName, key: m.key, at: new Date(), text: [spoken, text].filter(Boolean).join("\n"), images: [], group, plainText };
   }
   if (!phone) {
@@ -231,6 +276,8 @@ async function parse(socket: WASocket, m: WAMessage): Promise<InboundMessage | u
     key: m.key,
     at: new Date(Number(m.messageTimestamp ?? Date.now() / 1000) * 1000),
     replyToId: ctx?.stanzaId ?? undefined,
+    audioOrigin: !!audio,
+    audioError,
     text: body || (images.length ? "" : "(sent something I can't open yet, like a sticker or file)"),
     images,
   };
@@ -258,19 +305,8 @@ export const nameCall = () => new RegExp(`\\b(?:${[config.name, ...config.aliase
 export const spokenNameCall = () => {
   const names = [config.name, ...config.aliases];
   const split = names.flatMap((n) => Array.from({ length: Math.max(0, n.length - 3) }, (_, i) => `${esc(n.slice(0, i + 2))}[\\s-]${esc(n.slice(i + 2))}`));
-  return new RegExp(`\\b(?:${[...names.map(esc), ...split].join("|")})\\b`, "i");
+  return new RegExp(`(?<![\\p{L}\\p{M}\\p{N}_])(?:${[...names.map(esc), ...split].join("|")})(?![\\p{L}\\p{M}\\p{N}_])`, "iu");
 };
-
-/** A voice note as text for the assistant: "(voice note) what they said". */
-async function hear(socket: WASocket, m: WAMessage, mimetype: string | null | undefined, phone: string | undefined): Promise<string> {
-  try {
-    const audio = await downloadMediaMessage(m, "buffer", {}, { logger: baileysLog, reuploadRequest: socket.updateMediaMessage });
-    return `(voice note) ${await transcribe(audio, mimetype ?? "audio/ogg", person(phone)?.language)}`;
-  } catch (err) {
-    log.error({ err }, "couldn't transcribe voice note");
-    return "(sent a voice note that couldn't be transcribed)";
-  }
-}
 
 const groups = new Map<string, { name: string; phones: string[]; fetched: number }>();
 

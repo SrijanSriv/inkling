@@ -5,6 +5,10 @@
 
 # inkling
 
+Optional local voice-note transcription: run the [private speech gateway](speech/README.md) beside an existing
+whisper.cpp server on another machine. Registered users can speak English or Hindi/English and get text replies;
+the Pi keeps the normal chat permissions and encrypted history.
+
 A personal assistant that lives in WhatsApp, for you and a few friends. You text it the way you'd text a friend, on
 your own or in a group chat, and it texts back. Each person gets their own private conversation, memory and
 connected accounts.
