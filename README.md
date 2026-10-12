@@ -109,6 +109,31 @@ is checked again before sending, including current registration, group permissio
 The shared mailbox does not grant inbox/search access to other users. Sent mail is visible to whoever owns that
 mailbox. The feature stays off unless configured.
 
+With `INKLING_MAIL_REVIEW_ENABLED=true`, the shared mailbox also gets **owner-private important-mail reviews**.
+The Pi checks new Primary inbox mail every 15 minutes, starting from activation rather than importing the old
+inbox. It reads bounded thread text, uses the owner's private memory, recent words and previously approved replies
+to propose a grounded response, and identifies itself as the owner's assistant. Other registered users retain
+shared sending only; they never receive these alerts or gain shared-inbox access.
+
+Alerts arrive between 09:00 and 22:00 in the owner's timezone, at most four a day and at least 30 minutes apart.
+These are ceilings, not targets. Up to 20 messages are assessed per day; pending work carries over. Ordinary
+newsletters and routine receipts are skipped. Important informational/security messages can get an alert without
+a reply. If the answer needs an unknown fact or the owner's decision, the assistant asks rather than inventing it.
+Attachments are not downloaded, links are not followed, and reading does not mark messages read.
+
+Each review has an `M` number. Say **“list important emails”**, **“read email M1”**, **“open email M1”**,
+**“skip email M1”**, **“pause mail alerts”** or **“resume mail alerts”**. A preview shows the actual recipient,
+sending account, subject and exact reply. Say **“make it shorter”** to get a revised preview, then **“yes”** or
+**“yes send email M1”**. Changes always require another yes. Reply-to headers, subject and Gmail thread ID are
+set by code. Sending rechecks access and refuses if the conversation changed or was answered after the preview.
+V1 replies to one address, never reply-all. A changed recipient requires a separate new-email preview.
+
+Review records and writing examples are encrypted with the normal data and included in its backups. Approvals
+expire after 30 minutes and do not survive a restart; opening the review shows a fresh preview. Important reviews
+are kept for seven days. The monitor never replaces an active preview for another action. An uncertain delivery
+is not automatically retried; open the review manually. Repeatedly unassessable messages are reported in the
+important-mail list. Model triage can miss importance; it is assistance, not a guaranteed inbox alarm.
+
 ## How it works
 
 Tool results are checked before a reply is sent. If the model invents an internal completion note or replies only

@@ -9,7 +9,7 @@ import { openLink } from "./browse.js";
 import { callCalendarTool, calendarTools, describeEvent, findEvent, resolveEvent } from "./calendar.js";
 import { dateTools, handleDate } from "./dates.js";
 import { changesEnabled, deployChange, findChange, latestLive, listChanges, readyChange, startChange, undoChange } from "./changes.js";
-import { draftExpired, drafts, YES, type Draft } from "./drafts.js";
+import { draftExpired, drafts, mailApproval, YES, type Draft } from "./drafts.js";
 import { googleCalendarUrl, sharedEvent } from "./events.js";
 import { makeImage } from "./images.js";
 import { handleList, listTools } from "./lists.js";
@@ -17,7 +17,8 @@ import { handleTravel, travelTools } from "./travel.js";
 import { handleWatch, watchTools } from "./watches.js";
 import { findChats, isLinked, readChat, sendAsPerson, waitingForReply } from "./personal.js";
 import { config, getUsers, phonesOf, saveUsers, type User } from "./config.js";
-import { callGmailTool, gmailTools, sendEmail } from "./gmail.js";
+import { callGmailTool, emailReplyTarget, gmailTools, MailSendUncertain, sendEmail } from "./gmail.js";
+import { assistantMailBody, controlMailReview, mailReviewEnabled, mailReviewIdFor, mailReviewTools, markMailReplySent } from "./mail-review.js";
 import { mailSender, sharedMailSender } from "./mail-access.js";
 import { callWorkspaceTool, workspaceTools } from "./gdrive.js";
 import { finalDraft, forgetSignIns, signedInSites, webConfirm, webEnabled, webSignIn, webTask } from "./web-agent.js";
@@ -407,8 +408,9 @@ const sendEmailTool: OpenAI.Responses.FunctionTool = {
       subject: { type: "string" },
       text: { type: "string", description: "Plain text in their voice, short." },
       account: { type: ["string", "null"], description: "An allowed sending address only if explicitly requested. Otherwise null uses the configured assistant mailbox, falling back to their own Gmail." },
+      reply_to_message_id: { type: ["string", "null"], description: "Original Gmail message_id when replying or revising a reply; preserve it from the email review. Null for a new conversation. Shared mailbox replies are owner-private only." },
     },
-    required: ["to", "subject", "text", "account"],
+    required: ["to", "subject", "text", "account", "reply_to_message_id"],
     additionalProperties: false,
   },
 };
@@ -789,6 +791,7 @@ ${
       : `- If ${user.name} wants you to see or send from their own WhatsApp, call link_my_whatsapp; it sends them a code to type into WhatsApp.`
     : ""
 }
+- In owner-private mail reviews, mail_review lists/opens M-numbered important emails and pauses/resumes alerts. Use send_email to revise an email reply, preserving reply_to_message_id and its account; code adds the assistant signature to monitored replies. Every changed preview needs another yes. Never treat yes-with-edits as approval of the old version.
 - Messages that start with "(automatic: ...)" come from your own scheduler, not from a person. Do what they ask with your tools. If there's nothing worth sending, reply exactly NOTHING.
 - Send a WhatsApp poll with send_poll when people need to pick between options, like dates or places. Use poll_results to see how people voted. When asked for one, work out real options yourself (search if you need to) and send it straight away. Don't ask what to put in it, and don't repeat the options in text.
 - Set reminders with set_reminder when asked ("remind me at 6 to call the dentist", "remind us every Monday to..."). If they don't give a time, pick a sensible one. If they say it's urgent or important not to miss, set urgent: it also comes as a voice note. Confirm in a few words, e.g. "ok, 6pm". list_reminders and cancel_reminder manage them.
@@ -862,7 +865,9 @@ async function doDraft(chat: Chat, actions: ChatActions, draft: Draft, did: stri
     if (!draft.from) throw new Error("The email preview has no sending address. Ask for a new preview.");
     const sender = mailSender(uid, draft.emailGroupId, draft.from, draft.emailShared ? "shared" : "personal");
     if (!sender) throw new Error("Mail access has changed. Ask for a new email preview.");
-    await sendEmail(sender.userId, sender.email, draft.to, draft.subject ?? "", draft.text);
+    if (draft.emailReplyMessageId && sender.shared && (!getUsers().some(u => u.id === uid && u.owner) || chat.group)) throw new Error("Shared mailbox replies are only available to the owner privately.");
+    await sendEmail(sender.userId, sender.email, draft.to, draft.subject ?? "", draft.text, draft.emailReplyMessageId);
+    if (draft.emailReviewId) void markMailReplySent(uid, draft.emailReviewId, draft.text);
     did.push(`emailed ${draft.to} from ${draft.from}: ${draft.subject}`);
     log.info({ chat: chat.id }, "sent email");
     return { note: `Emailed ${draft.to} from ${draft.from}.`, say: `Sent to ${draft.to} ✅` };
@@ -930,6 +935,14 @@ export async function respond(chat: Chat, batch: Incoming[], actions: ChatAction
 
   // A plain "yes" to something waiting for one is done here, by code: the model can't re-word it or claim it's done.
   const waiting = !group && batch.length === 1 && !batch[0].images.length ? drafts.get(user.id) : undefined;
+  if (waiting?.emailReviewId && YES.test(batch[0].text) && batch[0].at.getTime() <= waiting.createdAt) {
+    return "Please review the email preview first, then reply yes again. Nothing was sent.";
+  }
+  if (waiting?.emailReviewId && /^(?:no|nope|nah|skip(?: it)?|don't send(?: it)?|do not send(?: it)?)[.! ]*$/i.test(batch[0].text.trim())) {
+    const result = await controlMailReview(user.id, "skip", waiting.emailReviewId, `skip email ${waiting.emailReviewId}`, async () => {});
+    appendHistory(chat.id, [{ role: "user", content: batch[0].text }, { role: "assistant", content: result }]);
+    return result;
+  }
   if (waiting && PLAIN_YES.test(batch[0].text) && waiting.createdAt < turnStart && !draftExpired(waiting)) {
     if (tweetsEnabled(user.id, chat.id) && tweetConfirmationAmbiguous(user.id)) return "There is a tweet suggestion and another action waiting. Please name the email, invite or browser action you want confirmed. Tweets are copy-and-paste only.";
     if (user.owner && codingEnabled()) {
@@ -946,8 +959,8 @@ export async function respond(chat: Chat, batch: Incoming[], actions: ChatAction
     } catch (err) {
       track("draft_confirmed", user.id, { kind: waiting.kind, ok: false });
       log.error({ chat: chat.id, err }, "couldn't do the confirmed draft");
-      say = `That didn't go through (${err instanceof Error ? err.message.slice(0, 120) : "error"}). Nothing was sent.`;
-      did.push("tried what they said yes to, but it failed; nothing was sent");
+      say = err instanceof MailSendUncertain ? err.message : `That didn't go through (${err instanceof Error ? err.message.slice(0, 120) : "error"}). Nothing was sent.`;
+      did.push(err instanceof MailSendUncertain ? "email delivery is uncertain; check Sent before trying again" : "tried what they said yes to, but it failed; nothing was sent");
     }
     archived(chat, appendHistory(chat.id, [
       { role: "user", content: `[${batch[0].at.toLocaleString("en-GB", { timeZone: user.timezone, dateStyle: "full", timeStyle: "short" })}] ${batch[0].text}` },
@@ -972,6 +985,7 @@ export async function respond(chat: Chat, batch: Incoming[], actions: ChatAction
       : []),
     ...ownTools,
     ...(!group && tweetsEnabled(user.id, chat.id) ? tweetTools : []),
+    ...(!group && mailReviewEnabled(user.id) ? mailReviewTools : []),
     ...(!group && user.owner && !guest && codingEnabled() ? codingTools : []),
     ...((group || (user.owner && !guest)) && musicEnabled() ? musicTools : []),
     ...(accounts.some((a) => a.gmail) ? gmailTools : []),
@@ -1232,7 +1246,7 @@ async function runTool(
   const offerDraft = async (d: Omit<Draft, "createdAt">): Promise<string> => {
     const uid = chat.user.id;
     const shown = drafts.get(uid);
-    const same = shown && shown.kind === d.kind && shown.to === d.to && shown.text === d.text && shown.subject === d.subject && shown.from === d.from && shown.emailShared === d.emailShared && shown.emailGroupId === d.emailGroupId;
+    const same = shown && shown.kind === d.kind && shown.to === d.to && shown.text === d.text && shown.subject === d.subject && shown.from === d.from && shown.emailShared === d.emailShared && shown.emailGroupId === d.emailGroupId && shown.emailReplyMessageId === d.emailReplyMessageId;
     if (same && shown.createdAt < turnStart && !draftExpired(shown)) {
       // Same thing they were already shown: keep that draft so their yes still counts.
       return chat.group
@@ -1281,6 +1295,11 @@ async function runTool(
     const args = JSON.parse(call.arguments || "{}") as Record<string, unknown>;
     log.info({ chat: chat.id, tool: call.name }, "tool");
     switch (call.name) {
+      case "mail_review": {
+        if (!humanTurn || chat.group || !mailReviewEnabled(chat.user.id)) return output("Mail reviews are owner-private only, on a human request.");
+        return output(await controlMailReview(chat.user.id, String(args.action), typeof args.id === "string" ? args.id : undefined,
+          said, async (_owner, text) => actions.send(text)));
+      }
       case "tweet_editor": {
         if (!humanTurn || chat.group || !tweetsEnabled(chat.user.id,chat.id)) return output("Error: Tweet editor requires the configured owner's private human request.");
         let result;
@@ -1383,9 +1402,22 @@ async function runTool(
         if (!/^[^\s@,<>"]+@[^\s@,<>"]+\.[^\s@,<>"]+$/.test(to)) return output(`"${args.to}" isn't one email address. Ask the requester for the recipient's email address.`);
         const sender = mailSender(chat.user.id, chat.group ? chat.id : undefined, typeof args.account === "string" ? args.account : undefined);
         if (!sender) return output("That sending account isn't available to this person in this chat. Do not suggest a Google setup link.");
-        const text = withLinks(String(args.text));
+        let text = withLinks(String(args.text));
         if (typeof text !== "string") return output(text.error);
-        return output(await offerDraft({ kind: "email", to, name: to, subject: noDashes(String(args.subject)), from: sender.email, emailShared: sender.shared, emailGroupId: chat.group ? chat.id : undefined, text }));
+        const previous = drafts.get(chat.user.id);
+        const replyId = typeof args.reply_to_message_id === "string" && args.reply_to_message_id ? args.reply_to_message_id : undefined;
+        if (replyId && sender.shared && (chat.group || !getUsers().some(u => u.id === chat.user.id && u.owner))) return output("Shared mailbox reply access is owner-private only; shared sending does not grant inbox access.");
+        if (!replyId && previous?.emailReplyMessageId && previous.to === to && previous.from === sender.email && !/\b(?:new|separate)\s+(?:email|mail|thread|conversation)\b/i.test(said)) {
+          return output(`Preserve reply_to_message_id=${previous.emailReplyMessageId} when editing this reply. Call send_email again with it.`);
+        }
+        const reply = replyId ? await emailReplyTarget(sender, replyId) : undefined;
+        if (reply && reply.to !== to) return output("Use the original email's reply address. A changed recipient needs a separate new-email preview.");
+        const reviewId = replyId ? mailReviewIdFor(chat.user.id, replyId) ?? (previous?.emailReplyMessageId === replyId ? previous?.emailReviewId : undefined) : undefined;
+        if (reply && sender.shared) {
+          text = assistantMailBody(chat.user.id, text);
+        }
+        return output(await offerDraft({ kind: "email", to, name: to, subject: reply?.subject ?? noDashes(String(args.subject)), from: sender.email,
+          emailShared: sender.shared, emailGroupId: chat.group ? chat.id : undefined, emailReplyMessageId: replyId, emailReviewId: reviewId, text }));
       }
       case "web_task":
       case "web_signin":
@@ -1473,12 +1505,13 @@ async function runTool(
         );
       }
       case "confirm_send": {
-        if (chat.group) return output("Not available here.");
+        if (chat.group || !humanTurn) return output("Confirmation requires a later human message in private chat.");
         if (/\bC\d+\b/i.test(said)) return output("That refers to a coding job. Use coding_continue for its answer; do not confirm an unrelated draft.");
         const uid = chat.user.id;
         if (tweetsEnabled(uid,chat.id) && (/\b(?:tweet|twitter|T\d+)\b/i.test(said) || (tweetConfirmationAmbiguous(uid) && !/\b(?:email|mail|invite|browser|booking|whatsapp)\b/i.test(said)))) return output("Error: Tweet feedback cannot confirm another outgoing action. Name that action explicitly. Tweets are posted manually.");
         const draft = drafts.get(uid);
         if (!draft) return output("There's nothing drafted. Draft it again.");
+        if (draft.emailReplyMessageId && !mailApproval(said, draft.emailReviewId)) return output("That is not an unconditional approval of this reply. Revise it if needed, show a fresh preview and wait for another yes; do not send the old draft.");
         if (draft.createdAt >= turnStart || draftExpired(draft)) return output("They haven't confirmed yet. Show them the draft and wait for their yes.");
         if (!YES.test(said.replace(/^\[[^\]]*\]\s*/, ""))) return output("Their reply isn't a clear yes. Ask again or change the draft.");
         const done = await doDraft(chat, actions, draft, did);

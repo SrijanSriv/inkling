@@ -10,14 +10,15 @@ const MAX_BODY_CHARS = 8_000;
 const MAX_THREAD_CHARS = 40_000;
 
 /** One person's connected Gmail account. */
-type Account = { userId: string; email: string };
+export type MailAccount = { userId: string; email: string };
+type Account = MailAccount;
 
 const gmailApi = (a: Account, endpoint: string, init?: RequestInit) =>
-  googleApi(a.userId, a.email, `https://gmail.googleapis.com/gmail/v1/users/me/${endpoint}`, init);
+  googleApi(a.userId, a.email, `https://gmail.googleapis.com/gmail/v1/users/me/${endpoint}`, { ...init, signal: init?.signal ?? AbortSignal.timeout(45_000) });
 
 type Header = { name: string; value: string };
 type Part = { mimeType?: string; filename?: string; headers?: Header[]; body?: { data?: string; size?: number }; parts?: Part[] };
-type GmailMessage = { id: string; threadId: string; labelIds?: string[]; snippet?: string; payload?: Part };
+export type GmailMessage = { id: string; threadId: string; internalDate?: string; labelIds?: string[]; snippet?: string; payload?: Part };
 
 const header = (m: GmailMessage, name: string) =>
   m.payload?.headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ?? "";
@@ -103,7 +104,7 @@ async function findEmail(accounts: Account[], name: string): Promise<string> {
   return found.map(([email, e]) => `- ${e.name || "(no name)"} <${email}> (in ${e.count} email${e.count > 1 ? "s" : ""})`).join("\n");
 }
 
-async function readThread(a: Account, threadId: string): Promise<string> {
+export async function readThread(a: Account, threadId: string): Promise<string> {
   const thread = (await gmailApi(a, `threads/${encodeURIComponent(threadId)}?format=full`)) as { messages: GmailMessage[] };
   let out = thread.messages
     .map((m) => {
@@ -143,8 +144,71 @@ function rawEmail(to: string[], subject: string, body: string, cc: string[] = []
 }
 
 /** Sends an email from one of their Gmail accounts. Only called after they've said yes to exactly this email. */
-export async function sendEmail(userId: string, from: string, to: string, subject: string, body: string): Promise<void> {
-  await gmailApi({ userId, email: from }, "messages/send", { method: "POST", body: JSON.stringify({ raw: rawEmail([to], subject, body) }) });
+export class MailSendUncertain extends Error {
+  constructor() { super("Gmail did not confirm delivery. Check Sent before trying again; the email may have been sent."); }
+}
+export async function sendEmail(userId: string, from: string, to: string, subject: string, body: string, replyTo?: string): Promise<void> {
+  const account = { userId, email: from };
+  const message = await emailPayload(account, to, subject, body, replyTo);
+  try { await gmailApi(account, "messages/send", { method: "POST", body: JSON.stringify(message) }); }
+  catch { throw new MailSendUncertain(); } // Never retry an ambiguous send automatically.
+}
+
+/** Prepare without sending; used by the confirmation path and isolated fixture checks. */
+export async function emailPayload(account: Account, to: string, subject: string, body: string, replyTo?: string) {
+  const reply = replyTo ? await emailReplyTarget(account, replyTo) : undefined;
+  if (reply && (reply.to !== to.toLowerCase() || reply.subject !== subject)) throw new MailReplyChanged("The reply target changed. Ask for a fresh preview.");
+  return {
+    raw: rawEmail([to], subject, body, [], reply?.headers), ...(reply && { threadId: reply.threadId }),
+  };
+}
+
+/** One recipient only. Ambiguous Reply-To headers never silently become reply-all. */
+export function mailAddress(value: string): string | undefined {
+  const match = value.trim().match(/^(?:[^<>]*<([^<>]+)>|([^<>]+))$/);
+  const email = (match?.[1] || match?.[2] || "").trim().toLowerCase();
+  return /^[^\s@,<>"]+@[^\s@,<>"]+\.[^\s@,<>"]+$/.test(email) ? email : undefined;
+}
+
+export class MailReplyChanged extends Error {}
+export function replyMetadata(original: GmailMessage, latestId: string) {
+  if (original.id !== latestId || original.labelIds?.some(l => l === "SENT" || l === "DRAFT")) {
+    throw new MailReplyChanged("This conversation has changed or was already answered. Open it for a fresh preview.");
+  }
+  const to = mailAddress(header(original, "Reply-To") || header(original, "From"));
+  const messageId = clean(header(original, "Message-ID"));
+  if (!to || !/^<[^<>\s]+>$/.test(messageId)) throw new MailReplyChanged("This email has no unambiguous reply address or message identifier.");
+  const originalSubject = clean(header(original, "Subject"));
+  const references = [...new Set([...(header(original, "References").match(/<[^<>\s]+>/g) || []).slice(-100), messageId])].join(" ");
+  return { to, subject: /^re:/i.test(originalSubject) ? originalSubject : `Re: ${originalSubject}`,
+    threadId: original.threadId, messageId: original.id,
+    headers: [`In-Reply-To: ${messageId}`, `References: ${references}`] };
+}
+
+export async function emailReplyTarget(account: Account, messageId: string) {
+  const meta = new URLSearchParams([["format", "metadata"], ...["From", "Reply-To", "Message-ID", "References", "Subject"].map(h => ["metadataHeaders", h])]);
+  const original = await gmailApi(account, `messages/${encodeURIComponent(messageId)}?${meta}`) as GmailMessage;
+  const thread = await gmailApi(account, `threads/${encodeURIComponent(original.threadId)}?format=minimal`) as { messages: GmailMessage[] };
+  const latest = thread.messages.filter(m => !m.labelIds?.includes("DRAFT")).at(-1);
+  return replyMetadata(original, latest?.id || "");
+}
+
+export async function listPrimaryMail(account: Account, after: number, before: number, page?: string) {
+  const query = new URLSearchParams({ q: `in:inbox category:primary after:${Math.floor(after / 1000)} before:${Math.ceil(before / 1000)} -in:sent`, maxResults: "25" });
+  if (page) query.set("pageToken", page);
+  return await gmailApi(account, `messages?${query}`) as { messages?: { id: string; threadId: string }[]; nextPageToken?: string };
+}
+
+export async function mailForReview(account: Account, messageId: string) {
+  const message = await gmailApi(account, `messages/${encodeURIComponent(messageId)}?format=metadata`) as GmailMessage;
+  const thread = await gmailApi(account, `threads/${encodeURIComponent(message.threadId)}?format=full`) as { messages: GmailMessage[] };
+  const latest = thread.messages.filter(m => !m.labelIds?.includes("DRAFT")).at(-1);
+  if (!latest || latest.id !== messageId || !latest.labelIds?.includes("INBOX") || latest.labelIds?.some(l => ["SENT", "SPAM", "TRASH"].includes(l))) return;
+  const to = mailAddress(header(latest, "Reply-To") || header(latest, "From"));
+  return { messageId, threadId: message.threadId, receivedAt: Number(latest.internalDate),
+    from: clean(header(latest, "From")), to, subject: clean(header(latest, "Subject")),
+    text: thread.messages.slice(-12).map(m => `From: ${clean(header(m, "From"))}\nDate: ${clean(header(m, "Date"))}\n${bodyText(m.payload).slice(0, MAX_BODY_CHARS)}`).join("\n\n---\n\n").slice(-MAX_THREAD_CHARS),
+    automated: !!header(latest, "List-Unsubscribe") || /^(?:auto-generated|auto-replied)$/i.test(header(latest, "Auto-Submitted")) || !!to && /(?:no.?reply|do.?not.?reply|mailer-daemon|postmaster)[^@]*@/i.test(to) };
 }
 
 async function createDraft(

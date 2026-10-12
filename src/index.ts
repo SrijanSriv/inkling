@@ -16,6 +16,7 @@ import { adminLink, startWeb } from "./web.js";
 import { botPhone, groupInfo, link, markRead, releaseWhatsApp, nameCall, react, resendMedia, sendImage, sendDocument, sendPoll, sendText, sendVoiceNote, setPersonLookup, setAudioAccess, showTyping, startWhatsApp, type InboundMessage } from "./whatsapp.js";
 import { startOperationNotifications } from "./operations.js";
 import { startReadingNotifications } from "./reading-sharing.js";
+import { mailReviewEnabled, startMailReview } from "./mail-review.js";
 import { speak } from "./voice.js";
 import { voiceErrorText } from "./voice-intake.js";
 import { startScheduler, type RunJob } from "./schedule.js";
@@ -473,6 +474,23 @@ startMemoryUpkeep();
 const owner = getUsers().find((u) => u.owner);
 if (owner) startCodingNotifications(owner.id, notifyPerson(owner), () => link.connected);
 if (owner) startOperationNotifications(owner.id, notifyPerson(owner), () => link.connected);
+startMailReview({
+  available: id => link.connected && !handingOver && !queues.get(id)?.busy && !queues.get(id)?.pending.length,
+  exclusive: async (id, work) => {
+    if (!link.connected || handingOver || !mailReviewEnabled(id)) return false;
+    const queue = queues.get(id) ?? { busy: false, pending: [] };
+    if (queue.busy || queue.pending.length) return false;
+    // Incoming human messages wait until the complete preview is registered, not just transmitted.
+    queue.busy = true; queues.set(id, queue);
+    try { await work(); return true; }
+    finally { queue.busy = false; if (queue.pending.length) void drain(id, queue); else queues.delete(id); }
+  },
+  send: async (id, text, messageId) => {
+    const current = getUsers().find(u => u.id === id && u.owner);
+    if (!current || !mailReviewEnabled(id) || !link.connected || handingOver) throw new Error("Mail alert delivery paused");
+    await sendText(`${current.phone}@s.whatsapp.net`, text, messageId);
+  },
+});
 startTweetEditor({
   available: () => {
     const id=process.env.INKLING_TWEETS_USER_ID;
