@@ -60,8 +60,11 @@ export const link: { qr?: string; connected: boolean } = { connected: false };
 const sent = new Map<string, proto.IMessage>();
 
 export async function startWhatsApp(onMessage: OnMessage, onConnected?: OnConnected): Promise<void> {
+  if (released) return;
   const { state, saveCreds } = await useMultiFileAuthState(path.join(config.dataDir, "auth"));
   const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: undefined }));
+  // Handover can happen while a scheduled reconnect is preparing its socket.
+  if (released) return;
 
   const socket = makeWASocket({
     auth: state,
