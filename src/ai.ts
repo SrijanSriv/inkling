@@ -80,6 +80,12 @@ export function tuned(
   };
 }
 
+/** Compatible endpoints opt in separately: many reject reasoning settings entirely. */
+export function backgroundTuned(): ReturnType<typeof tuned> {
+  if (config.provider === "compatible" && config.backgroundReasoning) return { reasoning: { effort: "low" } };
+  return tuned("low");
+}
+
 /**
  * Voice notes and images use OpenAI-style audio and image APIs. With Azure or OpenAI as the provider that's the same
  * account; with Claude (which has neither) or another server, inkling uses Azure or OpenAI keys if they're also set.

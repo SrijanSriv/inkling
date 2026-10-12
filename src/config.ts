@@ -25,6 +25,7 @@ export const config = {
   // Model names (on Azure, deployment names; by default a deployment is named after its model).
   model: process.env.INKLING_MODEL ?? (provider === "anthropic" ? "claude-opus-5-5" : "gpt-5-mini"),
   transcribeModel: process.env.INKLING_TRANSCRIBE_MODEL ?? "gpt-4o-transcribe",
+  backgroundReasoning: process.env.INKLING_BACKGROUND_REASONING === "true",
   whisperUrl: process.env.INKLING_WHISPER_URL || undefined,
   whisperSecret: process.env.INKLING_WHISPER_SECRET || undefined,
   voiceReplies: process.env.INKLING_VOICE_REPLIES ?? (process.env.INKLING_WHISPER_URL ? "text" : "auto"),
