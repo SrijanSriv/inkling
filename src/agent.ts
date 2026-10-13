@@ -924,7 +924,7 @@ export async function respond(chat: Chat, batch: Incoming[], actions: ChatAction
   const compactVoice = microphoneTurn && config.micCompact;
   const microphoneIncomplete = microphoneTurn && batch.some(m => m.microphone?.warning);
   const { user, group } = chat;
-  if (microphoneTurn && (group || !getUsers().some(u => u.id === user.id && u.owner))) return "Room microphone conversations are owner-private.";
+  if (microphoneTurn && (group || isGuest(user) || !getUsers().some(u => u.id === user.id))) return "Microphone conversations are available in registered private chats.";
   const turn = startTurn(user.id, chat.id, !!group);
 
   if (!microphoneTurn && !group && tweetsEnabled(user.id, chat.id) && batch.length === 1 && !batch[0].images.length && !batch[0].text.startsWith("(automatic")) {

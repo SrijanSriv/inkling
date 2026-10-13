@@ -32,6 +32,8 @@ export const config = {
   micControlUrl: process.env.INKLING_MIC_CONTROL_URL?.replace(/\/$/, "") || undefined,
   micHost: process.env.INKLING_MIC_HOST ?? "127.0.0.1",
   micPort: Number(process.env.INKLING_MIC_PORT ?? 8792),
+  micTlsCert: process.env.INKLING_MIC_TLS_CERT || undefined,
+  micTlsKey: process.env.INKLING_MIC_TLS_KEY || undefined,
   micCompareCommand: process.env.INKLING_MIC_COMPARE_COMMAND || undefined,
   micReviewModel: process.env.INKLING_MIC_REVIEW_MODEL || undefined,
   micReviewReference: process.env.INKLING_MIC_REVIEW_REFERENCE || undefined,

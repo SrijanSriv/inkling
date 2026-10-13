@@ -438,3 +438,36 @@ Mocked fixtures covered preservation of all notes and recent context, chat-isola
 replies, lazy tool loading, refusal of unoffered calls even beside a loader call, command text never executing,
 spoken approval remaining blocked and unchanged typed turns. Real model smoke checks covered a recent follow-up,
 older-memory routing and browser routing without executing any tool or sending any message.
+
+### Private mic page: source selection and replies
+
+Registered users can now request `/mic` in their own private chat; guests and groups cannot. Each expiring link
+is tied to its requester, uses their own conversation context, and is rechecked against registration. Source
+markers and outgoing-approval restrictions remain in force. The capture service has one shared slot and tells
+other users it is busy without exposing another person's audio, transcript, comparison or reply.
+
+The page offers Pi microphone and this phone/laptop microphone. Browser capture requests audio permission on
+selection, immediately releases the permission-check stream, and records only during a subsequent hold. It uses
+an AudioWorklet and browser resampling to upload bounded 16 kHz mono PCM WAV on release, sharing the existing
+recognizer and validation. Permission failure never silently falls back to recording the room. Release, cancel,
+page loss, overlong capture and interrupted upload are distinct outcomes. Browser upload requires the matching
+registered user's active capture ID; duplicates do not start a second transcription.
+
+Browser microphone access requires a trusted secure context. The existing HTTP home-Wi-Fi page can still drive
+the Pi microphone but cannot enable browser recording. Deploy behind an authorised HTTPS proxy, or configure
+`INKLING_MIC_TLS_CERT` and `INKLING_MIC_TLS_KEY` with a certificate trusted by the user's device and a matching
+HTTPS `INKLING_MIC_CONTROL_URL`. A private CA requires a one-time trust installation per device. Do not disable
+browser security or expose another service just to work around this requirement.
+[Browser permission and secure-context requirements](https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getUserMedia)
+
+After a mic turn completes, the page displays the same final reply sent to WhatsApp, plus delivery status and
+elapsed time. For a release in the current tab, the browser measures release submission to the first poll showing
+the reply using its monotonic clock. A refreshed page uses server submission-to-send-acceptance time instead.
+Neither proves phone WhatsApp arrival. Only the latest mic reply for that person is shown; it is held in memory
+for up to thirty minutes and remains separate from encrypted durable chat history. General chat history is not
+served by the page. A generation/delivery failure is shown rather than leaving the page waiting silently.
+
+Ad-hoc mocked fixtures verify non-admin registration, cross-user isolation, removal revoking links, WAV size/format
+checks, cancel/stale/duplicate uploads, single enqueue, permission selection, device hold/release, safe text rendering,
+elapsed-time display, worklet flush and overlong cancellation. No fixture captures real audio or sends messages.
+Actual permission and acoustic behaviour still require trials on the chosen phone/laptop browser.

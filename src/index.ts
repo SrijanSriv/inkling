@@ -17,7 +17,7 @@ import { botPhone, groupInfo, link, markRead, releaseWhatsApp, nameCall, react, 
 import { startOperationNotifications } from "./operations.js";
 import { startReadingNotifications } from "./reading-sharing.js";
 import { mailReviewEnabled, startMailReview } from "./mail-review.js";
-import { microphoneLink, startMicrophone } from "./microphone.js";
+import { microphoneLink, microphoneReply, startMicrophone } from "./microphone.js";
 import { speak } from "./voice.js";
 import { voiceErrorText } from "./voice-intake.js";
 import { startScheduler, type RunJob } from "./schedule.js";
@@ -66,7 +66,7 @@ function onMessage(msg: InboundMessage): void {
   if (handingOver) return keepPending(msg);
   const user = msg.phone ? findUserByPhone(msg.phone) : undefined;
   if (msg.source === "microphone") {
-    if (user?.owner && !msg.group) enqueue(msg, user);
+    if (user && !isGuest(user) && !msg.group) enqueue(msg, user);
     return;
   }
 
@@ -235,7 +235,15 @@ async function drain(key: string, queue: { busy: boolean; pending: Queued[] }): 
           spoken = true;
         }
       }
-      if (!spoken) await sendReply(chatJid, reply);
+      if (last.source === "microphone" && last.microphone) {
+        try {
+          await sendReply(chatJid,reply);
+          microphoneReply(user.id,last.key.id!,reply,Date.now()-last.microphone.doneAt,true);
+        } catch (err) {
+          microphoneReply(user.id,last.key.id!,reply,Date.now()-last.microphone.doneAt,false);
+          throw err;
+        }
+      } else if (!spoken) await sendReply(chatJid, reply);
       if (last.source === "microphone" && last.microphone) log.info({ transcriptionMs: last.microphone.transcriptionMs,
         queueMs: Math.max(0,agentStarted-last.microphone.doneAt-last.microphone.transcriptionMs), agentMs,
         totalMs: Date.now()-last.microphone.doneAt }, "microphone reply completed");
@@ -248,7 +256,10 @@ async function drain(key: string, queue: { busy: boolean; pending: Queued[] }): 
     } catch (err) {
       stopTyping();
       log.error({ chat: chat.id, err }, "failed to respond");
-      await sendText(chatJid, "Something went wrong on my end. Try again in a minute?").catch(() => {});
+      const failure = "Something went wrong on my end. Try again in a minute?";
+      let delivered = false;
+      await sendText(chatJid, failure).then(()=>{delivered=true;}).catch(() => {});
+      if (last.source === "microphone" && last.microphone) microphoneReply(user.id,last.key.id!,failure,Date.now()-last.microphone.doneAt,delivered);
     }
   }
   queue.busy = false;
@@ -344,9 +355,9 @@ const runJob: RunJob = async (target, prompt) => {
 async function runCommand(chat: Chat, chatJid: string, command: string): Promise<string | undefined> {
   const { user, group } = chat;
   if (command === "/mic") {
-    if (group || !getUsers().some(u => u.id === user.id && u.owner)) return "Microphone controls are only available in the owner's private chat.";
+    if (group || isGuest(user) || !getUsers().some(u => u.id === user.id)) return "Microphone controls are available in registered private chats.";
     const url = microphoneLink(user.id);
-    return url ? `Open this on home Wi-Fi, tap Listen, then Done. I'll send the exact transcript here. This first step won't act on your words.\n${url}` : "Microphone controls aren't configured or available yet.";
+    return url ? `Open this link, choose a microphone, then hold the circle to speak and release to send. Your reply will appear here and on the page.\n${url}` : "Microphone controls aren't configured or available yet.";
   }
   // Admin commands: "/add Sam +44 7700 900042", "/remove Sam", and in groups "/open" or "/close".
   if (user.admin && group) {
@@ -488,12 +499,12 @@ startMemoryUpkeep();
 startMicrophone({
   available: () => link.connected && !handingOver,
   send: async (id, text, messageId) => {
-    const current = getUsers().find(u => u.id === id && u.owner);
+    const current = getUsers().find(u => u.id === id);
     if (!current || !link.connected || handingOver) throw new Error("Microphone delivery unavailable");
     await sendText(`${current.phone}@s.whatsapp.net`, text, messageId);
   },
   converse: async (id, input) => {
-    const current = getUsers().find(u => u.id === id && u.owner);
+    const current = getUsers().find(u => u.id === id);
     if (!current || !link.connected || handingOver) throw new Error("Microphone conversation unavailable");
     const chatJid = `${current.phone}@s.whatsapp.net`;
     onMessage({ source: "microphone", microphone: { doneAt: input.doneAt, transcriptionMs: input.transcriptionMs, warning: input.warning },
