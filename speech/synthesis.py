@@ -108,12 +108,18 @@ def speech_chunks(text):
             continue
         if text[match.start()] in ',:' and before[-1:].isdigit() and after[:1].isdigit():
             continue
-        boundaries.append(end)
+        boundaries.append((end, text[match.start()] in '.!?।'))
     chunks, start = [], 0
     while start < len(text):
-        target, minimum, maximum = (10, 8, 18) if not chunks else (26, 14, 40)
-        candidates = [(abs(len(text[start:end].split())-target), end) for end in boundaries
-                      if end > start and minimum <= len(text[start:end].split()) <= maximum]
+        candidates = []
+        for end, sentence in boundaries:
+            if end <= start:
+                continue
+            # A short complete sentence has natural prosody; a tiny comma fragment usually does not.
+            target, minimum, maximum = ((10, 6, 24) if sentence else (10, 8, 18)) if not chunks else (26, 14, 40)
+            words = len(text[start:end].split())
+            if minimum <= words <= maximum:
+                candidates.append((abs(words-target), end))
         if not candidates or len(chunks) >= 7:
             chunks.append(text[start:])
             break

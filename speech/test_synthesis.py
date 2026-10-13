@@ -54,6 +54,12 @@ class SynthesisChecks(unittest.TestCase):
             self.assertEqual(''.join(chunks), text)
             self.assertLessEqual(len(chunks), 8)
         self.assertEqual(speech_chunks('Meet Dr. Maya at 9 a.m. tomorrow.'), ['Meet Dr. Maya at 9 a.m. tomorrow.'])
+        text = 'Everything is working as expected now. We can continue with the next step when you are ready.'
+        chunks = speech_chunks(text)
+        self.assertEqual(chunks[0].strip(), 'Everything is working as expected now.')
+        self.assertEqual(''.join(chunks), text)
+        text = 'Everything is working as expected now, and we can continue with the next step when you are ready.'
+        self.assertEqual(speech_chunks(text), [text])  # Six-word comma fragment is still too small.
 
     def test_stream_holds_one_lock_and_releases_on_cancel(self):
         text = 'I can help you get that working reliably, and we can take it one step at a time.'

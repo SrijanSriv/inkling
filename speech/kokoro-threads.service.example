@@ -1,0 +1,5 @@
+# Optional drop-in for an existing user-level Kokoro service.
+# Benchmark on your hardware first; four beat six on the measured four-core CPU.
+# Install as ~/.config/systemd/user/kokoro.service.d/threads.conf, then daemon-reload/restart that service.
+[Service]
+Environment=KOKORO_THREADS=4

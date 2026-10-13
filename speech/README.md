@@ -29,8 +29,9 @@ See [the v1 plan](../docs/speech-to-speech-v1-plan.md) and [the epic](../docs/sp
 ### Optional phrase output
 
 `INKLING_MIC_SPEECH_STREAMING=true` on the Pi selects the authenticated `/synthesize/stream` route.
-The gateway makes a short opening chunk at a natural punctuation boundary, normally 8-18 words and closest
-to ten. Later chunks target 26 words, bounded by natural breaks at 14-40 words. Tiny tails are merged.
+The gateway makes a short opening chunk at a natural punctuation boundary, closest to ten words.
+Comma/semicolon/colon clauses require 8-18 words; complete sentences can use 6-24 words because they
+have their own natural ending. Later chunks target 26 words, bounded by natural breaks at 14-40 words. Tiny tails are merged.
 If no suitable boundary exists the text stays together. Wording is preserved, and known abbreviations,
 decimal numbers and numeric comma/colon pairs are protected. This is deterministic punctuation splitting,
 not a complete language parser; no text is rewritten and no additional model call is made.
@@ -53,6 +54,12 @@ Logs add `room speech first chunk ready` (`firstChunkMs`) and `room speech strea
 `bytes`, `feedMs`). First-playback timings still start after Ellie's final answer checks. Audio device
 buffering and actual audibility are outside those process-start timings. Set the flag false and restart Ellie
 to restore full-WAV output; owner controls and the voice remain unchanged.
+
+For CPU Kokoro, benchmark `KOKORO_THREADS` rather than assuming more is faster. In the measured four-core,
+eight-thread laptop, four inference threads beat the server's default six; one, two and three were slower.
+`kokoro-threads.service.example` is an optional user-unit drop-in for that measured setting. It changes only
+the thread count, not the voice, playback speed or recognition worker. Remove the drop-in and restart Kokoro
+to restore its previous default. Warm the configured cached voice with synthetic text after restarting.
 
 For controlled microphone diagnosis, `compare-whisper.py` reads one 0.3-20-second, 16 kHz mono PCM WAV from stdin
 and runs two or three explicitly configured local Whisper models on that exact recording. It uses independent CLI

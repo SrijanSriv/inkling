@@ -63,3 +63,47 @@ passed checks. Cancellation stops audio, not actions already performed by tools.
 - [Kokoro voice limitations](https://huggingface.co/hexgrad/Kokoro-82M/blob/main/VOICES.md)
 - [Kokoro pipeline](https://github.com/hexgrad/kokoro/blob/main/kokoro/pipeline.py)
 - [Streaming playback example](https://github.com/remsky/Kokoro-FastAPI/blob/master/examples/stream_tts_playback.py)
+
+## Follow-up: CPU tuning and complete-sentence boundaries
+
+The same cached CPU model/voice was benchmarked in one offline candidate process at 6, 4, 2, 1, 3 and then
+6 threads again. Each setting received a warm-up and two runs of a nine-word phrase, an 18-word sentence
+and the same 36-word reply above. No live model parameters were changed during this comparison.
+
+| CPU threads | Nine-word phrase | Sentence | Complete reply |
+| --- | --- | --- | --- |
+| 6, initial baseline | 0.92-0.96 s | 1.89-1.90 s | 4.31-4.39 s |
+| 4 | 0.83-0.87 s | 1.68-1.69 s | 3.84-3.99 s |
+| 2 | 1.29-1.32 s | 2.59-2.60 s | 6.23-6.54 s |
+| 1 | 2.21-2.23 s | 4.36-4.39 s | 10.75-10.78 s |
+| 3 | 1.03-1.05 s | 2.06-2.08 s | 4.99-5.06 s |
+| 6, repeated baseline | 1.04-1.08 s | 2.04-2.10 s | 4.59-4.71 s |
+
+Four threads beat both six-thread baselines by roughly 10-20%, depending on length and baseline. Timing
+drift is visible, so this is not a universal speed claim. The measured CPU has four physical cores and eight
+logical threads. Generated audio durations were unchanged across these thread settings. The live user unit
+now uses a `KOKORO_THREADS=4` drop-in; the voice/model/speed and GPU recognizers are unchanged. A warmed
+HTTP request on the actual restarted service generated the nine-word phrase in 0.90 seconds.
+
+The initial splitter rejected every complete opening sentence below eight or above eighteen words, even
+when it had a natural full stop. Its follow-up keeps comma fragments at 8-18 words but allows complete
+opening sentences at 6-24 words. The target remains ten and the eight-word minimum final tail is retained.
+It still does not cut names or timing expressions at arbitrary word positions or rewrite the text.
+
+A fictional 17-word reply with a six-word opening sentence stayed in one chunk under the previous rule.
+On the tuned live service, two runs measured:
+
+| Input | Synthesis time | Audio duration |
+| --- | --- | --- |
+| Full 17-word reply | 1.88 / 1.84 s | 6.08 s |
+| Six-word opening sentence | 0.92 / 0.91 s | 3.23 s |
+| Eleven-word remainder | 1.00 / 0.97 s | 3.40 s |
+
+That example makes first audio available roughly 0.9 seconds earlier, with ample synthesis overlap for the
+remainder. Some additional pause/prosody differences are possible; listening feedback remains necessary.
+Short replies without a suitable boundary still stay whole. These gains cannot be added to predict a fixed
+end-to-end improvement for different live questions.
+
+Rollback: remove the Kokoro thread-count drop-in and restart that service to restore its previous default;
+the pre-change synthesis source is preserved on the laptop for restoring the older boundary rule. Setting
+`INKLING_MIC_SPEECH_STREAMING=false` still restores complete-WAV output independently of CPU tuning.
