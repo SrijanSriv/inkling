@@ -10,7 +10,7 @@ import { log } from "./log.js";
 const RATE = 16000, MAX_BYTES = RATE * 2 * 20;
 const PAGE = readFileSync(new URL("../assets/microphone.html", import.meta.url), "utf8");
 type Phase = "idle" | "starting" | "listening" | "transcribing" | "sending" | "sent" | "cancelled" | "error";
-type Status = { phase: Phase; detail: string; seconds: number; level: number; signal: string; transcript?: string; id?: string };
+type Status = { phase: Phase; detail: string; seconds: number; level: number; signal: string; transcript?: string; id?: string; recordingExpiresAt?: number };
 type Job = { id: string; owner: string; recorder: ChildProcessWithoutNullStreams; chunks: Buffer[]; bytes: number;
   samples: number; sum: number; energy: number; clipped: number; lastFrame: number; start: number;
   closing: boolean; cancelled: boolean; deadline: NodeJS.Timeout; watchdog: NodeJS.Timeout };
@@ -40,6 +40,7 @@ export class Microphone {
   private expires = 0;
   private stateOwner?: string;
   private arrivals: number[] = [];
+  private recording?: { owner: string; id: string; audio: Buffer; until: number; timer: NodeJS.Timeout };
   constructor(private deps: MicDependencies) {}
 
   linkFor(owner: string): string {
@@ -60,9 +61,12 @@ export class Microphone {
       this.state = { phase: "idle", detail: "Tap Listen for a new recording.", seconds: 0, level: 0, signal: "not checked" };
       this.expires = 0;
     }
-    return { ...this.state };
+    return { ...this.state, recordingExpiresAt: this.recording && Date.now() < this.recording.until ? this.recording.until : undefined };
   }
   private update(patch: Partial<Status>): void { this.state = { ...this.state, ...patch }; }
+  private clearRecording(): void {
+    if (this.recording) { clearTimeout(this.recording.timer); this.recording.audio.fill(0); this.recording = undefined; }
+  }
 
   control(owner: string, action: string): string {
     if (!getUsers().some(u => u.id === owner && u.owner)) throw new Error("Microphone controls are owner-private.");
@@ -78,6 +82,7 @@ export class Microphone {
     if (!job || job.owner !== owner) throw new Error("There is no microphone request in progress.");
     if (action === "cancel") {
       job.cancelled = true;
+      this.clearRecording();
       if (!job.closing) this.stop(job, "cancel");
       else this.update({ detail: "Cancelled. Waiting for the current service call to finish; no new result will be sent." });
       return "Cancelled.";
@@ -87,6 +92,7 @@ export class Microphone {
   }
 
   private begin(owner: string): void {
+    this.clearRecording();
     const recorder = this.deps.record?.() ?? spawn("pw-record", ["--raw", "--target", config.micSource!, "--rate", String(RATE), "--channels", "1", "--format", "s16", "-"], { stdio: "pipe" });
     const job = { id: randomUUID(), owner, recorder, chunks: [], bytes: 0, samples: 0, sum: 0, energy: 0, clipped: 0,
       start: Date.now(), lastFrame: Date.now(), closing: false, cancelled: false } as unknown as Job;
@@ -145,6 +151,10 @@ export class Microphone {
       this.job = undefined; this.expires = Date.now() + 60_000; return;
     }
     const audio = microphoneWav(Buffer.concat(job.chunks)); job.chunks = [];
+    // Independent copy: expiry must not zero a request still being decoded by the speech gateway.
+    this.recording = { owner: job.owner, id: job.id, audio: Buffer.from(audio), until: Date.now() + 60_000,
+      timer: setTimeout(() => this.clearRecording(), 60_000) };
+    this.recording.timer.unref();
     this.update({ phase: "transcribing", level: 0, detail: "Transcribing with the existing speech service…" });
     void this.finish(job, audio);
   }
@@ -172,21 +182,26 @@ export class Microphone {
   handle = async (req: http.IncomingMessage, res: http.ServerResponse): Promise<void> => {
     const reply = (code: number, body: unknown, type = "application/json") => {
       res.writeHead(code, { "content-type": `${type}; charset=utf-8`, "cache-control": "no-store", "referrer-policy": "no-referrer",
-        "x-content-type-options": "nosniff", "x-frame-options": "DENY", "content-security-policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'" });
-      res.end(type === "text/html" ? String(body) : JSON.stringify(body));
+        "x-content-type-options": "nosniff", "x-frame-options": "DENY", "content-security-policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; media-src blob:; base-uri 'none'; frame-ancestors 'none'; form-action 'none'" });
+      res.end(Buffer.isBuffer(body) ? body : type === "text/html" ? String(body) : JSON.stringify(body));
     };
-    const pathname = (req.url || "").split("?")[0];
+    const url = new URL(req.url || "/", "http://localhost"), pathname = url.pathname;
     if (req.method === "GET" && pathname === "/") return reply(200, PAGE, "text/html");
     const owner = this.authorized(req.headers.authorization?.replace(/^Bearer /, "") || "");
     if (!owner) return reply(403, { error: "Link expired or unavailable. Send /mic in your private WhatsApp chat for a fresh link." });
     if (req.method === "GET" && pathname === "/status") return reply(200, this.status(owner));
+    if (req.method === "GET" && pathname === "/audio") {
+      const recording = this.recording;
+      if (!recording || recording.owner !== owner || recording.id !== url.searchParams.get("id") || Date.now() >= recording.until) return reply(410, { error: "Recording expired or unavailable. Make a new short test." });
+      return reply(200, recording.audio, "audio/wav");
+    }
     if (req.method !== "POST" || !["/listen", "/done", "/cancel"].includes(pathname)) return reply(404, { error: "Not found" });
     // Bearer auth prevents cross-site forms; origin checks also reject accidental cross-site scripts.
     if (req.headers.origin && req.headers.origin !== new URL(config.micControlUrl!).origin) return reply(403, { error: "Wrong origin" });
     try { return reply(200, { message: this.control(owner, pathname.slice(1)) }); }
     catch (error) { return reply(409, { error: error instanceof Error ? error.message : "Control unavailable" }); }
   };
-  close(): void { if (this.job) { this.job.cancelled = true; if (!this.job.closing) this.stop(this.job, "cancel"); } this.sessions.clear(); }
+  close(): void { this.clearRecording(); if (this.job) { this.job.cancelled = true; if (!this.job.closing) this.stop(this.job, "cancel"); } this.sessions.clear(); }
 }
 
 let microphone: Microphone | undefined;

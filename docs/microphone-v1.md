@@ -189,7 +189,11 @@ model download or Python dependency is needed for this manual stage. Keep this p
 Send `/mic` privately as the owner, open the link on home Wi-Fi, tap Listen, wait for Listening, speak, then tap Done
 before 20 seconds. The token is in the URL fragment, never in HTTP request paths; fresh links revoke the owner's old
 link. Every control/status call rechecks owner registration. A restart invalidates all links. Only the latest result
-is held in short-lived process memory; it clears after a minute. No recordings are written to disk on the Pi.
+is held in short-lived process memory; it clears after a minute. **Listen back** retrieves the exact captured PCM
+as WAV through the same owner-authenticated control page. A separate copy stays in RAM for 60 seconds after Done,
+then is zeroed and released even if no page polls. Starting another capture or cancelling clears it sooner. It is
+bound to the capture id and cannot be retrieved by another owner or after expiry. The page releases its playback
+blob when the recording expires or the connection becomes unavailable. No recordings are written to disk on the Pi.
 The existing gateway still uses its documented transient decoding workflow. In-flight transcription cancellation
 suppresses delivery but waits for the shared service call to finish. A send already started cannot be recalled.
 
@@ -197,6 +201,9 @@ Isolated stage-one fixtures covered PCM/WAV framing, access and origin checks, r
 frames, silent/constant/clipped/short/overlong input, device loss/stall, cancellation and uncertain-delivery no-retry.
 No real emails or WhatsApp messages were sent in those tests. These software fixtures do not substitute for the
 owner's requested-phrase test or the room-noise trials below.
+
+Replay fixtures additionally verified exact PCM bytes, authentication, capture-id binding, cancellation, expiry,
+role revocation and that clearing the replay copy does not corrupt an in-flight transcription request.
 
 1. Verify varying input on the normal capture route. `mic-check.py` tests this without saving speech. All-zero,
    disconnected, stalled and clipping fixtures must be distinguishable.
@@ -239,3 +246,22 @@ owner's requested-phrase test or the room-noise trials below.
   WhatsApp loop. [Wyoming Satellite](https://github.com/rhasspy/wyoming-satellite) is deprecated in its favor.
 - Existing repo: `src/voice.ts`, `src/voice-intake.ts`, `speech/server.py`, `src/index.ts`, `src/agent.ts`, `src/drafts.ts`.
   Extend these integration boundaries rather than porting an earlier assistant backend or cognitive-memory stack.
+
+## Additional normal-volume probe
+
+With permission to sample the owner's ongoing talking/singing, a 9.76-second bounded capture measured RMS -36.1
+and peak -17.2 dBFS with zero clipped samples. Silero marked 17.2% of frames as speech; the maximum Hey Jarvis score
+was .0188. These are detector outputs, not ground truth labels. Singing is not necessarily treated as ordinary
+speech, and this short sample does not measure a false-wake rate. Whisper accepted the clip in 2.964 seconds and
+returned three words. Without the intended wording that is **not an accuracy pass**, nor evidence that all of the
+sample was understood. No raw recording, transcript copy or WhatsApp message was retained/sent by this probe.
+
+The Python wake-plus-VAD diagnostic process peaked at 213.6 MiB RSS, exceeding the proposed 150 MiB idle-detector
+budget. It exited after the probe. Do not enable that exact stack continuously and claim it met the budget. Measure
+steady RSS, startup peaks and CPU in a separate next step; reduce imports/runtime overhead or evaluate a smaller
+runtime before changing the always-on design. The deployed manual stage does not load those models at all.
+
+The manual control page was reachable over the home network and returned HTTP 403 for unauthenticated status
+requests. Use a reachable home-network address in `INKLING_MIC_CONTROL_URL`; `.local` name resolution varies by
+client. A numeric address requires a DHCP reservation or updating the configuration when the Pi's LAN address
+changes. Do not assume that an SSH hostname resolving on one computer proves phone-browser reachability.
