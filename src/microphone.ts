@@ -77,6 +77,7 @@ export class Microphone {
   private input?: PiMicrophoneInput;
   private muteGate?: MicrophoneMuteGate;
   private switchActive = config.micMuteSwitch;
+  private switchNoticeAt = 0;
   constructor(private deps: MicDependencies) {
     if(config.micMuteSwitch){
       const owner=getUsers().find(u=>u.owner);
@@ -90,7 +91,17 @@ export class Microphone {
         const job=this.job!;job.physical=true;
         for(const frame of first)this.acceptFrame(job,Buffer.from(frame));
         log.info("physical microphone capture started");return true;
-      } catch {log.info("physical microphone start skipped while unavailable or busy");return false;}
+      } catch (error) {
+        const detail=error instanceof Error?error.message:"";
+        const reason=detail.startsWith("Too many microphone")?"rate_limit":this.job||this.comparing?"busy":"unavailable";
+        log.info({reason},"physical microphone start skipped");
+        if(reason==="rate_limit"&&Date.now()-this.switchNoticeAt>=60_000&&this.deps.available()){
+          this.switchNoticeAt=Date.now();
+          void this.deps.send(owner.id,`${detail} Then mute and unmute to try again.`, `INKMICB${randomUUID().replaceAll("-","")}`)
+            .catch(()=>log.warn("physical microphone notice delivery unconfirmed"));
+        }
+        return false;
+      }
     },()=>{
       const job=this.job;
       if(job?.physical&&!job.closing){this.stop(job,"done");log.info("physical microphone mute inferred; capture sealed");}
@@ -189,7 +200,11 @@ export class Microphone {
       if (this.job || this.comparing) throw new Error("A microphone request is already in progress. Wait or cancel it.");
       this.prune();
       const arrivals = (this.arrivals.get(owner) || []).filter(at => Date.now()-at<600_000);
-      if (arrivals.length >= 12) throw new Error("Too many microphone requests. Try again in a few minutes.");
+      // Conversation turns need room for ordinary back-and-forth, while remaining bounded per person.
+      if (arrivals.length >= (config.micConversation ? 60 : 12)) {
+        const seconds=Math.max(1,Math.ceil((arrivals[0]+600_000-Date.now())/1000));
+        throw new Error(`Too many microphone requests. Try again in ${seconds} seconds.`);
+      }
       arrivals.push(Date.now()); this.arrivals.set(owner,arrivals);
       this.begin(owner, action === "hold", device, incremental, physical); return this.input&&!device ? "Listening. Speak now." : "Starting capture. Wait for Listening before speaking.";
     }

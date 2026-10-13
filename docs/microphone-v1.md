@@ -525,7 +525,10 @@ control to the owner. Registered page users still have their own isolated captur
 The cap remains 20 seconds. Overlong recordings are discarded rather than submitting a truncated request or
 silently starting another one. A busy/failed attempt requires another mute/unmute cycle; USB loss or a stalled
 recorder cancels rather than submits. Errors generate at most one private notice per capture, without automatic
-retries. The normal rate limit applies. Owner status on the page shows the switch state. Typed owner-private
+retries. Conversation mode allows 60 starts per person in a rolling ten minutes (transcript-only mode retains
+12). The previous 12-start limit silently blocked ordinary back-and-forth with the physical switch. A blocked
+physical start now logs a content-free reason; rate-limit refusals notify the owner with the remaining wait,
+at most once per minute. Failed attempts still require a fresh mute/unmute cycle. Owner status on the page shows the switch state. Typed owner-private
 commands `/mic switch off` and `/mic switch on` disable/rearm this control; their preference is encrypted in the
 owner's `mic-switch.sealed` and survives restarts. Off keeps warm input available for the page button. Groups,
 other registered users and room speech cannot change this setting.
