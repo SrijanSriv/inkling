@@ -278,7 +278,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if not self.authorized():
             return self.answer(401, {'error': 'unauthorized'})
-        if self.path == '/synthesize':
+        if self.path in ('/synthesize', '/synthesize/stream'):
             return self.synthesize()
         mic = self.path == '/microphone' and bool(MIC_UPSTREAM)
         if self.path != '/transcribe' and not mic:
@@ -337,6 +337,7 @@ class Handler(BaseHTTPRequestHandler):
         from synthesis import SpeechError
         if SYNTHESIS is None:
             return self.answer(404, {'error': 'unavailable'})
+        streaming_started = False
         try:
             size = self.headers.get('Content-Length', '')
             if (len(self.headers.get_all('Content-Length', [])) != 1 or self.headers.get('Transfer-Encoding')
@@ -351,19 +352,45 @@ class Handler(BaseHTTPRequestHandler):
                 payload = json.loads(raw)
             except (ValueError, UnicodeError):
                 raise SpeechError(400, 'invalid_request')
-            audio = SYNTHESIS.run(payload)
-            self.send_response(200)
-            self.send_header('Content-Type', 'audio/wav')
-            self.send_header('Content-Length', str(len(audio)))
-            self.send_header('Cache-Control', 'no-store')
-            self.end_headers()
-            self.wfile.write(audio)
+            if self.path == '/synthesize/stream':
+                iterator = SYNTHESIS.stream(payload)
+                try:
+                    first = next(iterator)  # Reject invalid/busy requests before sending success headers.
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/x-inkling-wav-stream')
+                    self.send_header('Cache-Control', 'no-store')
+                    self.send_header('Connection', 'close')
+                    self.end_headers()
+                    streaming_started = True
+                    self.close_connection = True
+                    def write_frame(audio):
+                        self.wfile.write(len(audio).to_bytes(4, 'big'))
+                        self.wfile.write(audio)
+                        self.wfile.flush()
+                    write_frame(first)
+                    first = None
+                    for audio in iterator:
+                        write_frame(audio)
+                    self.wfile.write(b'\0' * 4)  # Explicit success marker: EOF alone is not completion.
+                    self.wfile.flush()
+                finally:
+                    iterator.close()
+            else:
+                audio = SYNTHESIS.run(payload)
+                self.send_response(200)
+                self.send_header('Content-Type', 'audio/wav')
+                self.send_header('Content-Length', str(len(audio)))
+                self.send_header('Cache-Control', 'no-store')
+                self.end_headers()
+                self.wfile.write(audio)
         except SpeechError as error:
-            self.answer(error.status, {'error': error.code})
+            if not streaming_started:
+                self.answer(error.status, {'error': error.code})
         except (BrokenPipeError, ConnectionResetError):
             pass
         except Exception:
-            self.answer(503, {'error': 'unavailable'})
+            if not streaming_started:
+                self.answer(503, {'error': 'unavailable'})
 
 
 if __name__ == '__main__':

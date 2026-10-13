@@ -26,6 +26,34 @@ needs a listening trial; no automatic transliteration or extra model rewrite is 
 
 See [the v1 plan](../docs/speech-to-speech-v1-plan.md) and [the epic](../docs/speech-to-speech-epic.md).
 
+### Optional phrase output
+
+`INKLING_MIC_SPEECH_STREAMING=true` on the Pi selects the authenticated `/synthesize/stream` route.
+The gateway makes a short opening chunk at a natural punctuation boundary, normally 8-18 words and closest
+to ten. Later chunks target 26 words, bounded by natural breaks at 14-40 words. Tiny tails are merged.
+If no suitable boundary exists the text stays together. Wording is preserved, and known abbreviations,
+decimal numbers and numeric comma/colon pairs are protected. This is deterministic punctuation splitting,
+not a complete language parser; no text is rewritten and no additional model call is made.
+
+The gateway uses the existing warm Kokoro endpoint for each chunk, holding its single-flight lock for the
+entire utterance. It forwards validated complete WAV chunks framed as a four-byte big-endian byte length
+and that WAV. A zero length ends a successful stream. Missing completion, trailing data, malformed WAV,
+more than eight chunks, more than 2.2 MB total or more than 45 seconds of aggregate audio stop playback.
+The content type is `application/x-inkling-wav-stream`. Neither route is public.
+
+The Pi strips each WAV header and writes PCM into one `pw-play` stdin, respecting backpressure. The bounded network response is prefetched in RAM independently of the player,
+so slow playback does not incorrectly trip the synthesis HTTP deadline. Later
+synthesis overlaps current playback; a separate audio device/process is not opened for each phrase.
+Unmute cancels playback and the HTTP stream. The gateway finishes at most its current upstream call before
+noticing a disconnected client; it does not abandon the single-flight lock or queue replacement work.
+Network failures can leave already-spoken partial content, so there is no automatic restart/replay of the answer.
+WhatsApp retains the full final text. A busy replacement turn stays text-only rather than accumulating audio.
+
+Logs add `room speech first chunk ready` (`firstChunkMs`) and `room speech stream completed` (`chunks`,
+`bytes`, `feedMs`). First-playback timings still start after Ellie's final answer checks. Audio device
+buffering and actual audibility are outside those process-start timings. Set the flag false and restart Ellie
+to restore full-WAV output; owner controls and the voice remain unchanged.
+
 For controlled microphone diagnosis, `compare-whisper.py` reads one 0.3-20-second, 16 kHz mono PCM WAV from stdin
 and runs two or three explicitly configured local Whisper models on that exact recording. It uses independent CLI
 processes with two CPU threads and lower scheduling priority; it never reloads the live server. Supply `--cli`,

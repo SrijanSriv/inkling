@@ -91,22 +91,114 @@ async function musicQuiet(): Promise<void> {
   } catch(error) {throw error instanceof SpeechFailure?error:new SpeechFailure("music_unavailable");}
 }
 
-export function playSpeech(pcm: Buffer, signal: AbortSignal, started: ()=>void): Promise<void> {
-  return new Promise((resolve,reject)=>{
-    if(signal.aborted)return reject(new SpeechFailure("cancelled"));
-    const child=spawn("pw-play",["--target",config.micSpeechSink!,"--properties","{ node.dont-reconnect = true node.dont-fallback = true }",
+/** Framed complete WAV chunks allow validation before any bytes reach the speaker. */
+async function* readSpeechChunks(text:string,signal:AbortSignal):AsyncGenerator<Buffer> {
+  const combined=AbortSignal.any([signal,AbortSignal.timeout(12_000)]);
+  const response=await fetch(new URL("/synthesize/stream",config.whisperUrl!),{method:"POST",
+    headers:{authorization:`Bearer ${config.whisperSecret}`,"content-type":"application/json"},
+    body:JSON.stringify({text,voice:config.micSpeechVoice}),signal:combined});
+  if(!response.ok){await response.body?.cancel();throw new SpeechFailure(response.status===429?"busy":"synthesis_failed");}
+  if(response.headers.get("content-type")!=="application/x-inkling-wav-stream"||!response.body){
+    await response.body?.cancel();throw new SpeechFailure("invalid_audio");}
+  const reader=response.body.getReader();let pending:Buffer=Buffer.alloc(0),total=0,count=0,seconds=0,complete=false;
+  try {
+    while(true){
+      const {value,done}=await reader.read();
+      if(done){if(!complete||pending.length)throw new SpeechFailure("invalid_audio");return;}
+      if(complete)throw new SpeechFailure("invalid_audio");
+      const merged=Buffer.concat([pending,value]);pending.fill(0);pending=merged;
+      if(pending.length>MAX_AUDIO+32)throw new SpeechFailure("invalid_audio");
+      while(pending.length>=4){
+        const size=pending.readUInt32BE(0);
+        if(size===0){
+          if(!count||pending.length!==4)throw new SpeechFailure("invalid_audio");
+          pending.fill(0);pending=Buffer.alloc(0);complete=true;break;
+        }
+        if(size<44||size>MAX_AUDIO)throw new SpeechFailure("invalid_audio");
+        if(pending.length<4+size)break;
+        const wav=Buffer.from(pending.subarray(4,4+size));
+        const rest=Buffer.from(pending.subarray(4+size));pending.fill(0);pending=rest;
+        try {
+          total+=wav.length;seconds+=speechPcm(wav).length/48000;
+          if(++count>8||total>MAX_AUDIO||seconds>45)throw new SpeechFailure("invalid_audio");
+          yield wav;
+        } finally {wav.fill(0);}
+      }
+    }
+  } catch(error) {
+    if(error instanceof SpeechFailure)throw error;
+    throw new SpeechFailure(signal.aborted?"cancelled":combined.aborted?"timeout":"synthesis_failed");
+  } finally {pending.fill(0);await reader.cancel().catch(()=>{});reader.releaseLock();}
+}
+
+export async function* synthesizeSpeechChunks(text:string,signal:AbortSignal):AsyncGenerator<Buffer> {
+  // Drain the bounded network response independently of speaker backpressure. Otherwise a long
+  // spoken answer could hit the HTTP deadline even though synthesis had already finished.
+  const local=new AbortController(),combined=AbortSignal.any([signal,local.signal]);
+  const queue:Buffer[]=[];let done=false,failure:unknown,wake:(()=>void)|undefined;
+  const notify=()=>{wake?.();wake=undefined;};
+  const producer=(async()=>{
+    try {for await(const wav of readSpeechChunks(text,combined)){queue.push(Buffer.from(wav));notify();}}
+    catch(error){failure=error;}
+    finally {done=true;notify();}
+  })();
+  try {
+    while(true){
+      if(signal.aborted)throw new SpeechFailure("cancelled");
+      if(failure)throw failure;
+      const chunk=queue.shift();
+      if(chunk){try{yield chunk;}finally{chunk.fill(0);}continue;}
+      if(done)return;
+      await new Promise<void>(resolve=>{wake=resolve;});
+    }
+  } catch(error) {
+    if(error instanceof SpeechFailure)throw error;
+    throw new SpeechFailure(signal.aborted?"cancelled":error instanceof Error&&error.name==="TimeoutError"?"timeout":"synthesis_failed");
+  } finally {local.abort();await producer;for(const chunk of queue)chunk.fill(0);}
+}
+
+export function playSpeech(pcm:Buffer,signal:AbortSignal,started:()=>void):Promise<void> {
+  return playSpeechChunks((async function*(){yield pcm;})(),signal,started);
+}
+
+/** One process for the whole utterance, with bounded stream backpressure and cancellation. */
+export async function playSpeechChunks(chunks:AsyncIterable<Buffer>,signal:AbortSignal,started:()=>void):Promise<void> {
+  const iterator=chunks[Symbol.asyncIterator]();
+  let child:ReturnType<typeof spawn>|undefined,kill:NodeJS.Timeout|undefined,timeout:NodeJS.Timeout|undefined;
+  const stop=()=>{child?.kill("SIGTERM");kill??=setTimeout(()=>child?.kill("SIGKILL"),1000);kill.unref();};
+  const abort=()=>stop();signal.addEventListener("abort",abort,{once:true});
+  try {
+    const first=await iterator.next();
+    if(first.done||signal.aborted)throw new SpeechFailure("cancelled");
+    child=spawn("pw-play",["--target",config.micSpeechSink!,"--properties","{ node.dont-reconnect = true node.dont-fallback = true }",
       "--raw","--rate","24000","--channels","1","--format","s16","-"],{stdio:["pipe","ignore","ignore"]});
-    let settled=false,kill:NodeJS.Timeout|undefined;
-    const stop=()=>{child.kill("SIGTERM");kill??=setTimeout(()=>child.kill("SIGKILL"),1000);kill.unref();};
-    const abort=()=>stop();signal.addEventListener("abort",abort,{once:true});
-    const timeout=setTimeout(()=>{stop();},50_000);timeout.unref();
-    const finish=(error?:Error)=>{if(settled)return;settled=true;clearTimeout(timeout);clearTimeout(kill);signal.removeEventListener("abort",abort);error?reject(error):resolve();};
-    child.once("error",()=>finish(new SpeechFailure("playback_failed")));
-    child.once("spawn",()=>{if(signal.aborted)stop();else started();});
-    child.stdin.on("error",()=>{stop();});
-    child.once("close",code=>finish(signal.aborted?new SpeechFailure("cancelled"):code===0?undefined:new SpeechFailure("playback_failed")));
-    child.stdin.end(pcm);
-  });
+    const player=child;let ended=false,failed=false;
+    const closed=new Promise<void>((resolve,reject)=>{
+      player.once("error",()=>{failed=true;reject(new SpeechFailure("playback_failed"));});
+      player.once("close",code=>{ended=true;signal.aborted||code!==0?reject(new SpeechFailure(signal.aborted?"cancelled":"playback_failed")):resolve();});
+    });
+    void closed.catch(()=>{});
+    player.stdin!.on("error",()=>{failed=true;stop();});
+    player.once("spawn",()=>{if(signal.aborted)stop();else started();});
+    timeout=setTimeout(stop,50_000);timeout.unref();
+    let total=0;
+    const write=async(pcm:Buffer)=>{
+      total+=pcm.length;
+      if(signal.aborted||ended||failed)throw new SpeechFailure(signal.aborted?"cancelled":"playback_failed");
+      if(!pcm.length||pcm.length%2||total>45*48000)throw new SpeechFailure("invalid_audio");
+      // Wait for the write callback before releasing/zeroing this producer-owned buffer.
+      await new Promise<void>((resolve,reject)=>{
+        const cancel=()=>reject(new SpeechFailure("cancelled"));signal.addEventListener("abort",cancel,{once:true});
+        player.stdin!.write(pcm,error=>{signal.removeEventListener("abort",cancel);error?reject(new SpeechFailure("playback_failed")):resolve();});
+      });
+    };
+    await write(first.value);
+    while(true){const next=await iterator.next();if(next.done)break;await write(next.value);}
+    player.stdin!.end();await closed;
+  } catch(error) {stop();throw error;}
+  finally {signal.removeEventListener("abort",abort);clearTimeout(timeout);
+    try{await iterator.return?.();}finally{if(child&&!child.killed)child.kill("SIGTERM");
+      if(kill){if(child?.exitCode!==null||child?.signalCode)clearTimeout(kill);else child?.once("close",()=>clearTimeout(kill));}}}
 }
 
 export type RoomSpeechDependencies = {
@@ -114,6 +206,8 @@ export type RoomSpeechDependencies = {
   ready?: ()=>Promise<void>;
   quiet?: ()=>Promise<void>;
   synthesize?: (text:string)=>Promise<Buffer>;
+  stream?: (text:string,signal:AbortSignal)=>AsyncIterable<Buffer>;
+  playChunks?: (chunks:AsyncIterable<Buffer>,signal:AbortSignal,started:()=>void)=>Promise<void>;
   play?: (pcm:Buffer,signal:AbortSignal,started:()=>void)=>Promise<void>;
 };
 
@@ -163,18 +257,39 @@ export class RoomSpeech {
     try {
       await ready();if(!valid())throw new SpeechFailure("cancelled");
       this.state="synthesizing";this.reason=undefined;
-      const synthAt=Date.now();wav=await (this.deps.synthesize??synthesizeSpeech)(speech);
-      log.info({id,synthesisMs:Date.now()-synthAt,bytes:wav.length},"room speech synthesized");
-      const pcm=speechPcm(wav);await ready();if(!valid())throw new SpeechFailure("cancelled");
-      // Recheck removal, mute/source state and sink availability during room playback too.
-      watch=setInterval(()=>{if(checking)return;checking=true;
-        void (async()=>{try {if(!valid())throw new SpeechFailure("cancelled");await ready();}
-          catch {abort.abort();}finally{checking=false;}})();},1000);watch.unref();
-      await (this.deps.play??playSpeech)(pcm,abort.signal,()=>{
+      const synthAt=Date.now();
+      const watchPlayback=()=>{
+        watch=setInterval(()=>{if(checking)return;checking=true;
+          void (async()=>{try {if(!valid())throw new SpeechFailure("cancelled");await ready();}
+            catch {abort.abort();}finally{checking=false;}})();},1000);watch.unref();
+      };
+      const playbackStarted=()=>{
         if(!valid()){abort.abort();return;}
         this.state="speaking";log.info({id,firstPlaybackMs:Date.now()-started,
           muteToPlaybackMs:doneAt===undefined?undefined:Math.max(0,Date.now()-doneAt)},"room speech playback started");
-      });
+      };
+      if(config.micSpeechStreaming){
+        const source=(this.deps.stream??synthesizeSpeechChunks)(speech,abort.signal);
+        const pcmChunks=async function*(){
+          let count=0,bytes=0;
+          for await(const chunk of source){
+            try {
+              const pcm=speechPcm(chunk);bytes+=chunk.length;
+              if(!valid())throw new SpeechFailure("cancelled");
+              if(count++===0){await ready();if(!valid())throw new SpeechFailure("cancelled");
+                log.info({id,firstChunkMs:Date.now()-synthAt,bytes:chunk.length},"room speech first chunk ready");}
+              yield pcm;
+            } finally {chunk.fill(0);}
+          }
+          log.info({id,feedMs:Date.now()-synthAt,bytes,chunks:count},"room speech stream completed");
+        };
+        watchPlayback();await (this.deps.playChunks??playSpeechChunks)(pcmChunks(),abort.signal,playbackStarted);
+      } else {
+        wav=await (this.deps.synthesize??synthesizeSpeech)(speech);
+        log.info({id,synthesisMs:Date.now()-synthAt,bytes:wav.length},"room speech synthesized");
+        const pcm=speechPcm(wav);await ready();if(!valid())throw new SpeechFailure("cancelled");
+        watchPlayback();await (this.deps.play??playSpeech)(pcm,abort.signal,playbackStarted);
+      }
       if(abort.signal.aborted)throw new SpeechFailure("cancelled");
       if(this.turn===turn){this.state=this.enabled?"ready":"off";this.reason="played";}
       log.info({id,totalMs:Date.now()-started},"room speech playback completed");

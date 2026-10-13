@@ -4,6 +4,9 @@ Status: initial implementation built; voice-quality and live conversation accept
 For the full direction, measurements, alternatives and sources, see [the epic](speech-to-speech-epic.md).
 When scope differs, this document defines v1.
 
+The full-WAV baseline below remains available. A subsequent optional [phrase-output optimisation](speech-phrase-latency.md)
+adds bounded chunks and one continuous player after the same final-text checks; it does not change input or identity.
+
 ## The smallest useful release
 
 The owner unmutes the physical Pi microphone, speaks, then mutes. The existing transcription and assistant

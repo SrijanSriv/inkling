@@ -8,7 +8,7 @@ import wave
 from unittest.mock import patch
 from http.server import ThreadingHTTPServer
 import server
-from synthesis import Synthesis, SpeechError, validate_wav
+from synthesis import Synthesis, SpeechError, validate_wav, speech_chunks
 
 
 def wav():
@@ -40,6 +40,31 @@ class SynthesisChecks(unittest.TestCase):
         for audio in [b'not wav', wav()[:-10], b'\0'*2_200_001]:
             with self.assertRaises(SpeechError):
                 validate_wav(audio)
+
+    def test_phrases_preserve_text_and_protect_numbers_and_abbreviations(self):
+        text = ('I can help you get that working reliably, and we can take it one step at a time. '
+                'First, we will check the microphone and speaker connection, then test a short reply before changing anything else.')
+        chunks = speech_chunks(text)
+        self.assertEqual(''.join(chunks), text)
+        self.assertEqual(chunks[0].strip(), 'I can help you get that working reliably,')
+        self.assertTrue(8 <= len(chunks[0].split()) <= 18)
+        for text in ['Meet Dr. Maya at 9 a.m. tomorrow.', 'The value is 1, 000 and the price is 3.14.',
+                     'Yes.', 'A sentence without punctuation ' * 20]:
+            chunks = speech_chunks(text)
+            self.assertEqual(''.join(chunks), text)
+            self.assertLessEqual(len(chunks), 8)
+        self.assertEqual(speech_chunks('Meet Dr. Maya at 9 a.m. tomorrow.'), ['Meet Dr. Maya at 9 a.m. tomorrow.'])
+
+    def test_stream_holds_one_lock_and_releases_on_cancel(self):
+        text = 'I can help you get that working reliably, and we can take it one step at a time.'
+        with patch('synthesis.urllib.request.urlopen', return_value=io.BytesIO(wav())):
+            stream = self.engine.stream({'text':text,'voice':'af_bella'})
+            next(stream)
+            with self.assertRaises(SpeechError) as caught:
+                self.engine.run({'text':'other','voice':'af_bella'})
+            self.assertEqual(caught.exception.status, 429)
+            stream.close()
+        self.assertFalse(self.engine.lock.locked())
 
     def test_success_is_local_fixed_speed_and_validated(self):
         with patch('synthesis.urllib.request.urlopen', return_value=io.BytesIO(wav())) as upstream:
@@ -80,10 +105,10 @@ class SynthesisChecks(unittest.TestCase):
         server.SYNTHESIS, server.SECRET = self.engine, 'fixture-secret'
         httpd = ThreadingHTTPServer(('127.0.0.1', 0), server.Handler)
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
-        def request(body, **headers):
+        def request(body, path='/synthesize', **headers):
             connection = http.client.HTTPConnection('127.0.0.1', httpd.server_port, timeout=2)
             try:
-                connection.request('POST', '/synthesize', body, {'Authorization':'Bearer fixture-secret',
+                connection.request('POST', path, body, {'Authorization':'Bearer fixture-secret',
                     'Content-Type':'application/json', **headers})
                 response=connection.getresponse()
                 return response.status, response.read()
@@ -96,6 +121,12 @@ class SynthesisChecks(unittest.TestCase):
             self.assertEqual(request(b'not json')[0], 400)
             with patch('synthesis.urllib.request.urlopen', return_value=io.BytesIO(wav())):
                 self.assertEqual(request(body), (200, wav()))
+            with patch('synthesis.urllib.request.urlopen', side_effect=lambda *_a,**_k:io.BytesIO(wav())):
+                body=json.dumps({'text':'I can help you get that working reliably, and we can take it one step at a time.', 'voice':'af_bella'}).encode()
+                status, framed=request(body, '/synthesize/stream')
+                self.assertEqual(status, 200)
+                expected=(len(wav()).to_bytes(4,'big')+wav())*2+b'\0'*4
+                self.assertEqual(framed,expected)
             server.SYNTHESIS=None
             self.assertEqual(request(body)[0], 404)
         finally:
