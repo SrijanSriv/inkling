@@ -377,3 +377,20 @@ Fixtures used mocked models and send/action hooks: spoken yes left a pending dra
 tools were refused; coverage warnings removed tools; provenance survived pending/history; one decode ran; cancel
 suppressed enqueueing. No test sent an email, WhatsApp message or invite. Actual conversational quality and full
 reply time still need ordinary owner use before wake-word work.
+
+
+## Hold-to-speak control
+
+The manual page now uses a central press-and-hold circle: pointer down starts capture, release submits that same
+capture, and Space/Enter work while the circle is focused. Wait for Listening before speaking. A release arriving
+before the start response is serialized afterward, with the returned capture ID. Pointer cancellation, capture
+loss, page hiding and focus loss cancel rather than submit. No phone microphone permission is used.
+
+Held captures have a three-second renewable lease (`/hold`, `/held?id=...`). The page renews every 750 ms; the Pi
+watchdog cancels abandoned holds without transcription. Stale IDs and releases after lease expiry cannot submit.
+This bounds recording when a browser disappears before it can send a stop request. The existing 20-second capture
+limit remains. Legacy operator Listen/Done controls still work but do not receive the hold lease.
+
+DOM fixtures covered quick release before the start response, pointer loss/cancellation, page departure after
+release, keyboard repeats, unrelated pointers, and exactly one capture-bound submit. Fake-clock recorder fixtures
+covered lease expiry, renewal, stale IDs and expired release, with no real audio capture or message delivery.

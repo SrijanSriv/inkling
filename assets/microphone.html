@@ -3,32 +3,34 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
-<title>Microphone check</title>
+<title>Talk to your assistant</title>
 <style>
 body{font:18px/1.5 system-ui,sans-serif;max-width:34rem;margin:3rem auto;padding:0 1rem;background:#f3efe7;color:#172d27}
 main{background:white;border-radius:20px;padding:24px}h1{font-size:1.6rem;margin:0 0 8px}#phase{font-weight:700;font-size:1.3rem}
 progress{width:100%;height:20px}button{font:inherit;border-radius:12px;border:1px solid #b8cbc4;padding:12px 20px;margin:6px 6px 6px 0;cursor:pointer}
-button:first-child{background:#174b3c;color:white}button:disabled{opacity:.4;cursor:default}#transcript{white-space:pre-wrap}small{color:#54685f}
+.talk-wrap{display:flex;justify-content:center;margin:28px 0 18px}#talk{width:180px;height:180px;border-radius:50%;border:0;background:#174b3c;color:white;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:10px;margin:0;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;box-shadow:0 0 0 10px #e7eee9;transition:background .15s,box-shadow .15s}#talk.held{background:#226b52;box-shadow:0 0 0 14px #c8e4d5}#talk:focus-visible{outline:3px solid #2367b0;outline-offset:14px}#talk svg{width:38px;height:38px;pointer-events:none}#talkLabel{pointer-events:none;font-weight:650}.hold-help{text-align:center;color:#54685f;font-size:.95rem}button:disabled{opacity:.4;cursor:default}#transcript{white-space:pre-wrap}small{color:#54685f}
 </style>
 <main>
-<h1>Microphone check</h1>
+<h1>Talk to your assistant</h1>
 <p>Uses the microphone connected to the Pi. Your phone microphone stays off.</p>
 <div id="phase" role="status" aria-live="polite">Connecting…</div>
 <p id="detail"></p>
 <progress id="level" max="1" value="0" aria-label="Microphone input level"></progress>
 <p><span id="seconds">0.0</span> seconds · <span id="signal">not checked</span></p>
-<div><button id="listen" disabled>Listen</button><button id="done" disabled>Done</button><button id="cancel" disabled>Cancel</button></div>
+<div class="talk-wrap"><button id="talk" type="button" disabled aria-label="Hold to speak, release to send" aria-pressed="false" aria-describedby="holdHelp"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg><span id="talkLabel">Hold to speak</span></button></div>
+<p id="holdHelp" class="hold-help">Hold the circle, wait for Listening, then speak. Release to send. Up to 20 seconds.<br>You can also hold Space or Enter when the circle is focused.</p>
+<div><button id="cancel" disabled>Cancel</button></div>
 <p id="transcript"></p>
 <button id="replay" disabled>Listen back</button>
 <button id="compare" disabled>Compare recognizers</button>
 <audio id="audio" controls preload="none" hidden></audio>
 <p id="replayNotice"></p>
-<small id="modeNotice">Transcription check. Tap Done within 20 seconds. Listen back to check the captured audio. The latest recording is held in memory until one minute after transcription finishes, with a three-minute maximum after Done; audio is never archived. This link expires in 30 minutes.</small>
+<small id="modeNotice">Transcription check. Release within 20 seconds. Listen back to check the captured audio. The latest recording is held in memory until one minute after transcription finishes, with a three-minute maximum after release; audio is never archived. This link expires in 30 minutes.</small>
 </main>
 <script>
 const token=location.hash.slice(1);history.replaceState(null,'',location.pathname);
-const elements=Object.fromEntries(['phase','detail','level','seconds','signal','listen','done','cancel','transcript','replay','compare','audio','replayNotice'].map(id=>[id,document.getElementById(id)]));
-let stopped=false,requesting=false;
+const elements=Object.fromEntries(['phase','detail','level','seconds','signal','talk','cancel','transcript','replay','compare','audio','replayNotice'].map(id=>[id,document.getElementById(id)]));
+let stopped=false,requesting=false,hold,lastStatus;
 let recordingId,recordingUntil=0,blobUrl,replayTimer;
 function clearReplay(){clearTimeout(replayTimer);elements.audio.pause();elements.audio.removeAttribute('src');elements.audio.load();elements.audio.hidden=true;if(blobUrl)URL.revokeObjectURL(blobUrl);blobUrl=undefined;elements.replay.disabled=true;}
 async function call(path,method='GET'){
@@ -37,28 +39,81 @@ async function call(path,method='GET'){
  if(response.status===403){stopped=true;throw new Error(data.error);}
  if(!response.ok)throw new Error(data.error||'Connection unavailable');return data;
 }
-function disable(){for(const id of ['listen','done','cancel','replay','compare'])elements[id].disabled=true;}
+function drawControls(s=lastStatus){
+ const capturing=s&&['starting','listening'].includes(s.phase),busy=capturing||s&&['transcribing','comparing','sending'].includes(s.phase);
+ elements.talk.disabled=stopped||(hold?hold.released:!!busy||requesting);
+ elements.cancel.disabled=stopped||(hold?hold.released:!busy||requesting);
+ elements.compare.disabled=stopped||!s?.canCompare||requesting||!!hold;
+ elements.replay.disabled=stopped||!recordingUntil||requesting||!!hold;
+ const pressed=!!hold&&!hold.released;
+ elements.talk.classList.toggle('held',pressed);elements.talk.setAttribute('aria-pressed',String(pressed));
+ document.getElementById('talkLabel').textContent=pressed?(s?.phase==='listening'?'Release to send':'Opening mic…'):(busy||requesting?'Working…':'Hold to speak');
+}
+function disable(){for(const id of ['talk','cancel','replay','compare'])elements[id].disabled=true;}
+async function finishHold(session){
+ if(!session.settled||session.finishing)return;
+ session.finishing=true;requesting=true;drawControls();
+ try{
+  if(session.id){const result=await call('/'+(session.cancel?'cancel':'done')+'?id='+encodeURIComponent(session.id),'POST');elements.detail.textContent=result.message;lastStatus={...lastStatus,phase:session.cancel?'cancelled':'transcribing'};}
+ }catch(error){elements.detail.textContent=error.message;}
+ finally{if(hold===session)hold=undefined;requesting=false;drawControls();}
+}
+function releaseHold(cancel=false){
+ const session=hold;if(!session)return;if(cancel)session.cancel=true;if(session.released)return;
+ session.released=true;session.cancel=cancel;clearInterval(session.timer);
+ if(session.pointer!==undefined&&elements.talk.hasPointerCapture?.(session.pointer))elements.talk.releasePointerCapture(session.pointer);
+ drawControls();void finishHold(session);
+}
+async function startHold(pointer,key){
+ if(stopped||requesting||hold||elements.talk.disabled)return;
+ const session={pointer,key,released:false,cancel:false,settled:false,finishing:false};hold=session;requesting=true;clearReplay();drawControls();
+ if(pointer!==undefined)try{elements.talk.setPointerCapture(pointer);}catch{releaseHold(true);}
+ try{
+  const result=await call('/hold','POST');if(!result.id)throw new Error('Recording could not be confirmed. It will cancel automatically.');session.id=result.id;
+  if(!session.released)session.timer=setInterval(async()=>{
+   if(session.renewing||session.released)return;session.renewing=true;
+   try{await call('/held?id='+encodeURIComponent(session.id),'POST');}
+   catch(error){if(hold===session&&!session.released){elements.detail.textContent=error.message;releaseHold(true);}}
+   finally{session.renewing=false;}
+  },750);
+ }catch(error){elements.detail.textContent=error.message;session.released=true;session.cancel=true;}
+ finally{session.settled=true;if(session.released)await finishHold(session);else{requesting=false;drawControls();}}
+}
+elements.talk.addEventListener('pointerdown',event=>{if(event.button!==0||event.isPrimary===false)return;event.preventDefault();void startHold(event.pointerId);});
+window.addEventListener('pointerup',event=>{if(hold?.pointer===event.pointerId)releaseHold();});
+window.addEventListener('pointercancel',event=>{if(hold?.pointer===event.pointerId)releaseHold(true);});
+elements.talk.addEventListener('lostpointercapture',event=>{if(hold?.pointer===event.pointerId)releaseHold(true);});
+elements.talk.addEventListener('contextmenu',event=>event.preventDefault());
+elements.talk.addEventListener('click',event=>event.preventDefault());
+elements.talk.addEventListener('keydown',event=>{if(![' ','Enter'].includes(event.key))return;event.preventDefault();if(!event.repeat)void startHold(undefined,event.key);});
+window.addEventListener('keyup',event=>{if(hold?.key===event.key){event.preventDefault();releaseHold();}});
+window.addEventListener('blur',()=>releaseHold(true));
+function leavePage(){
+ const session=hold;releaseHold(true);
+ if(session?.id)fetch('/cancel?id='+encodeURIComponent(session.id),{method:'POST',headers:{Authorization:'Bearer '+token},keepalive:true}).catch(()=>{});
+}
+window.addEventListener('pagehide',leavePage);
+document.addEventListener('visibilitychange',()=>{if(document.hidden)leavePage();});
 async function poll(){
  if(stopped)return;
  try{
-  const s=await call('/status');
-  document.getElementById('modeNotice').textContent=(s.conversation?'Conversation mode: your transcript goes to the assistant, which can answer or use its normal tools. Room speech cannot approve outgoing drafts or change access/admin settings.':'Transcription check: no assistant actions run.')+' Tap Done within 20 seconds. Listen back is available until one minute after transcription, capped at three minutes after Done. Audio is never archived. Conversation transcripts use your normal encrypted chat history. This link expires in 30 minutes.';
+  const s=await call('/status');lastStatus=s;
+  document.getElementById('modeNotice').textContent=(s.conversation?'Conversation mode: your transcript goes to the assistant, which can answer or use its normal tools. Room speech cannot approve outgoing drafts or change access/admin settings.':'Transcription check: no assistant actions run.')+' Release within 20 seconds. Listen back is available until one minute after transcription, capped at three minutes after release. Audio is never archived. Conversation transcripts use your normal encrypted chat history. This link expires in 30 minutes.';
   elements.phase.textContent=s.phase[0].toUpperCase()+s.phase.slice(1);elements.detail.textContent=s.detail;
   elements.level.value=s.level;elements.seconds.textContent=s.seconds.toFixed(1);elements.signal.textContent=s.signal;
   elements.transcript.textContent=(s.transcript?'Heard: '+s.transcript:'')+(s.comparison?'\n\nSame-audio comparison:\n'+s.comparison:'');
   if(recordingId!==s.id||!s.recordingExpiresAt){clearReplay();elements.replayNotice.textContent='';}
   recordingId=s.id;recordingUntil=s.recordingExpiresAt||0;elements.replay.disabled=!recordingUntil||requesting;
-  const capturing=['starting','listening'].includes(s.phase),busy=capturing||['transcribing','comparing','sending'].includes(s.phase);
-  elements.listen.disabled=busy||requesting;elements.done.disabled=!capturing||requesting;elements.cancel.disabled=!busy||requesting;
-  elements.compare.disabled=!s.canCompare||requesting;
- }catch(error){disable();clearReplay();elements.phase.textContent='Unavailable';elements.detail.textContent=error.message;elements.level.value=0;elements.transcript.textContent='';}
+  drawControls(s);
+ }catch(error){releaseHold(true);disable();clearReplay();elements.phase.textContent='Unavailable';elements.detail.textContent=error.message;elements.level.value=0;elements.transcript.textContent='';}
  if(!stopped)setTimeout(poll,500);
 }
-for(const action of ['listen','done','cancel','compare'])elements[action].onclick=async()=>{
+for(const action of ['cancel','compare'])elements[action].onclick=async()=>{
+ if(action==='cancel'&&hold){releaseHold(true);return;}
  requesting=true;disable();
  try{const result=await call('/'+action,'POST');elements.detail.textContent=result.message;}
  catch(error){elements.detail.textContent=error.message;}
- finally{requesting=false;}
+ finally{requesting=false;drawControls();}
 };
 elements.replay.onclick=async()=>{
  const id=recordingId,until=recordingUntil;elements.replay.disabled=true;
