@@ -295,3 +295,11 @@ Working copies are transient, not a recording archive. The original replay copy 
 than the shared server's `/load` route. The shared operational model remains unchanged. Fixtures verified exact
 input reuse, private temporary cleanup, output validation, Unicode handling, owner reauthorization, cancellation
 and suppression of duplicate/unauthorized sends. These do not establish real recognition accuracy.
+
+The first owner-controlled English comparison favored Whisper small for wording and one proper noun, at about
+7.9 seconds versus 2.5 seconds. The following Hindi/English comparison favored the current Swift model for intent:
+the general model's English output omitted the request to set a reminder. This blocks selecting it as a replacement.
+Both candidates had been forced to `en`; that was the tested setting for Swift, but is an unresolved decoding
+confound for a general multilingual model. The diagnostic now supports explicit per-model language settings. Keep
+Swift at its established setting and evaluate general Whisper with automatic language detection on the same clip.
+Do not infer that a larger model is universally better, or that English output preserved the complete request.

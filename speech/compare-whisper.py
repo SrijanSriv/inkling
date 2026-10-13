@@ -23,7 +23,10 @@ def comparison_text(result):
     return text
 
 
-def compare(sound, executable, models, language='en', prompt='', temp_root='/dev/shm'):
+def compare(sound, executable, models, language='en', prompt='', temp_root='/dev/shm', model_languages=None):
+    model_languages = model_languages or {}
+    if any(label not in dict(models) or lang not in ('en', 'auto', 'hi') for label, lang in model_languages.items()):
+        raise ValueError('Invalid per-model language setting')
     if len(sound) > 644096:
         raise ValueError('Recording exceeds the diagnostic size limit')
     with wave.open(io.BytesIO(sound), 'rb') as audio:
@@ -40,8 +43,9 @@ def compare(sound, executable, models, language='en', prompt='', temp_root='/dev
         source, output = Path(folder)/'input.wav', Path(folder)/'result'
         source.write_bytes(sound)
         for label, model in models:
+            selected_language = model_languages.get(label, language)
             started = time.monotonic()
-            command = ['nice', '-n', '10', executable, '-m', model, '-f', str(source), '-l', language,
+            command = ['nice', '-n', '10', executable, '-m', model, '-f', str(source), '-l', selected_language,
                        '-t', '2', '-bs', '5', '-oj', '-of', str(output)]
             if prompt:
                 command.extend(['--prompt', prompt])
@@ -51,7 +55,7 @@ def compare(sound, executable, models, language='en', prompt='', temp_root='/dev
                 if len(raw) > 1000000:
                     raise ValueError('Oversized diagnostic output')
                 text = comparison_text(json.loads(raw))
-                results.append({'model': label, 'text': text, 'seconds': round(time.monotonic()-started, 3)})
+                results.append({'model': label, 'language': selected_language, 'text': text, 'seconds': round(time.monotonic()-started, 3)})
             except (OSError, ValueError, subprocess.SubprocessError):
                 results.append({'model': label, 'error': 'Comparison failed; no result to assess'})
             finally:
@@ -66,14 +70,16 @@ if __name__ == '__main__':
     parser.add_argument('--cli', required=True)
     parser.add_argument('--model', action='append', required=True, help='Label=/absolute/model/path; repeat for each candidate')
     parser.add_argument('--language', choices=['en', 'auto', 'hi'], default='en')
+    parser.add_argument('--model-language', action='append', default=[], help='Label=en|auto|hi; override language for a specific candidate')
     parser.add_argument('--prompt', default='', help='Same neutral vocabulary hint for every candidate; never the expected answer')
     args = parser.parse_args()
     try:
         models = [tuple(item.split('=', 1)) for item in args.model]
         if not 2 <= len(models) <= 3 or any(len(item) != 2 or not Path(item[1]).is_file() for item in models):
             raise ValueError('Supply two or three existing model paths')
+        languages = dict(item.split('=', 1) for item in args.model_language)
         print(json.dumps(compare(sys.stdin.buffer.read(644097), args.cli, models, args.language, args.prompt,
-                                 os.environ.get('INKLING_WHISPER_TMP', '/dev/shm')), ensure_ascii=False))
+                                 os.environ.get('INKLING_WHISPER_TMP', '/dev/shm'), languages), ensure_ascii=False))
     except (OSError, ValueError, wave.Error, EOFError):
         print(json.dumps({'error': 'Diagnostic failed. Check WAV format, duration, RAM temporary directory and configured model paths.'}))
         sys.exit(2)

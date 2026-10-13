@@ -8,6 +8,9 @@ is identical for all candidates and must not contain the expected test sentence.
 protected RAM-backed temporary storage afterward. Results go only to stdout for the operator; do not redirect real
 transcripts into logs or a repository. Compare outputs against what was actually said; a fluent output is not a
 quality score. Run English and natural Hindi/English trials before replacing the operational model.
+Use `--model-language Label=auto` (or `en`/`hi`) when candidates need different language settings. In particular,
+the tested Swift fine-tune uses `en`, while a general multilingual model should also be evaluated with `auto` for
+mixed Hindi/English speech. Forcing every model to `en` does not establish its best code-switching performance.
 
 The Pi checks sender access, downloads bounded audio and sends it through an SSH tunnel to `server.py` on a laptop.
 The gateway decodes with FFmpeg and calls an **existing** whisper.cpp HTTP service. It does not run another model
