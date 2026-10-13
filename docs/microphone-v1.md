@@ -471,3 +471,13 @@ Ad-hoc mocked fixtures verify non-admin registration, cross-user isolation, remo
 checks, cancel/stale/duplicate uploads, single enqueue, permission selection, device hold/release, safe text rendering,
 elapsed-time display, worklet flush and overlong cancellation. No fixture captures real audio or sends messages.
 Actual permission and acoustic behaviour still require trials on the chosen phone/laptop browser.
+
+### Existing HTTPS entry point
+
+The trusted operations receiver can optionally proxy `/mic/` to a loopback mic controller by configuring
+`webhook_mic_port` in its private operations config. It serves only the fixed mic page/assets/control routes;
+all private routes retain bearer authentication, registration and per-person checks in the controller. No inbox,
+main web app, browser service or arbitrary upstream is proxied. The signed `/github` endpoint is unchanged.
+The receiver bounds request threads, bodies, replies and upstream timeouts, and suppresses request logging.
+Set `INKLING_MIC_CONTROL_URL` to the authorised HTTPS origin plus `/mic`; the page resolves API and worklet
+URLs relative to that path. Fresh `/mic` links use the trusted HTTPS address, enabling browser permission prompts.

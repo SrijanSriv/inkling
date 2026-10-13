@@ -390,7 +390,7 @@ export function startMicrophone(deps: MicDependencies): void {
   if (!microphoneEnabled()) return;
   try {
     const address = new URL(config.micControlUrl!);
-    if (!/^https?:$/.test(address.protocol) || address.username || address.password || address.pathname !== "/") throw new Error("invalid microphone control address");
+    if (!/^https?:$/.test(address.protocol) || address.username || address.password || address.search || address.hash || !/^\/(?:[a-z0-9_-]+(?:\/[a-z0-9_-]+)*)?$/i.test(address.pathname)) throw new Error("invalid microphone control address");
     microphone = new Microphone({ ...deps, compare: deps.compare ?? (config.micCompareCommand ? compareMicrophone : undefined) });
     const controller = microphone;
     if (!!config.micTlsCert !== !!config.micTlsKey) throw new Error("Configure both microphone TLS files.");

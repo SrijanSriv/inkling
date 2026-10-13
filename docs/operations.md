@@ -141,3 +141,12 @@ shows schedules; journal entries report sanitized maintenance outcomes, never su
 Stop a feature by disabling its timer. A failed laptop review leaves the report pending for retry; a completed PR
 is rediscovered after a crash instead of publishing a duplicate. Transfer notices can be delayed while either
 host or WhatsApp is offline. A crash between sending a notice and recording its receipt can duplicate that notice.
+
+### Optional microphone HTTPS proxy
+
+After explicitly authorising public access to expiring private mic links, set `webhook_mic_port` to the
+loopback microphone controller's port in the Pi's private operations configuration. Install `ops/mic_proxy.py`
+together with the updated `ops/webhook.py`, and restart the receiver. `/mic/` serves the page; its fixed private
+routes require a registered person's expiring bearer link. Configure the assistant's HTTPS
+`INKLING_MIC_CONTROL_URL` with `/mic` as its path, then restart it. Leave the option absent to keep the proxy off.
+No other assistant services are exposed. Review and install these trusted wrappers manually, as with other ops changes.

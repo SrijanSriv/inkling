@@ -33,6 +33,7 @@ progress{width:100%;height:20px}button{font:inherit;border-radius:12px;border:1p
 </main>
 <script type="module">
 import {DeviceMicrophone} from "./microphone-device.js";
+const endpoint=path=>new URL('.'+path,location.href).href;
 const token=location.hash.slice(1);history.replaceState(null,'',location.pathname);
 const elements=Object.fromEntries(['phase','detail','level','seconds','signal','talk','cancel','transcript','replay','compare','audio','replayNotice'].map(id=>[id,document.getElementById(id)]));
 let stopped=false,requesting=false,hold,lastStatus,deviceReady=false,localStatus;
@@ -48,7 +49,7 @@ micChoices.onchange=async()=>{
 let recordingId,recordingUntil=0,blobUrl,replayTimer,submission,shownReplyId,shownElapsed;
 function clearReplay(){clearTimeout(replayTimer);elements.audio.pause();elements.audio.removeAttribute('src');elements.audio.load();elements.audio.hidden=true;if(blobUrl)URL.revokeObjectURL(blobUrl);blobUrl=undefined;elements.replay.disabled=true;}
 async function call(path,method='GET'){
- const response=await fetch(path,{method,headers:{Authorization:'Bearer '+token},cache:'no-store',signal:AbortSignal.timeout(5000)});
+ const response=await fetch(endpoint(path),{method,headers:{Authorization:'Bearer '+token},cache:'no-store',signal:AbortSignal.timeout(5000)});
  const data=await response.json();
  if(response.status===403){stopped=true;throw new Error(data.error);}
  if(!response.ok)throw new Error(data.error||'Connection unavailable');return data;
@@ -76,7 +77,7 @@ async function finishHold(session){
    if(session.device&&!session.cancel){
     const wav=await session.capture.finish();
     if(session.cancel)throw new Error('Recording cancelled.');
-    const response=await fetch('/input?id='+encodeURIComponent(session.id),{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'audio/wav'},body:wav,signal:AbortSignal.timeout(10000)});
+    const response=await fetch(endpoint('/input?id='+encodeURIComponent(session.id)),{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'audio/wav'},body:wav,signal:AbortSignal.timeout(10000)});
     const body=await response.json();if(!response.ok)throw new Error(body.error||'Recording upload failed.');
    }
   }
@@ -121,7 +122,7 @@ window.addEventListener('keyup',event=>{if(hold?.key===event.key){event.preventD
 window.addEventListener('blur',()=>releaseHold(true));
 function leavePage(){
  const session=hold;releaseHold(true);
- if(session?.id)fetch('/cancel?id='+encodeURIComponent(session.id),{method:'POST',headers:{Authorization:'Bearer '+token},keepalive:true}).catch(()=>{});
+ if(session?.id)fetch(endpoint('/cancel?id='+encodeURIComponent(session.id)),{method:'POST',headers:{Authorization:'Bearer '+token},keepalive:true}).catch(()=>{});
 }
 window.addEventListener('pagehide',leavePage);
 document.addEventListener('visibilitychange',()=>{if(document.hidden)leavePage();});
@@ -152,7 +153,7 @@ for(const action of ['cancel','compare'])elements[action].onclick=async()=>{
 elements.replay.onclick=async()=>{
  const id=recordingId,until=recordingUntil;elements.replay.disabled=true;
  try{
-  const response=await fetch('/audio?id='+encodeURIComponent(id),{headers:{Authorization:'Bearer '+token},cache:'no-store',signal:AbortSignal.timeout(5000)});
+  const response=await fetch(endpoint('/audio?id='+encodeURIComponent(id)),{headers:{Authorization:'Bearer '+token},cache:'no-store',signal:AbortSignal.timeout(5000)});
   if(!response.ok)throw new Error('Recording expired or unavailable. Make a new short test.');
   const blob=await response.blob();
   if(recordingId!==id||Date.now()>=until)return;

@@ -1,7 +1,7 @@
-"""Loopback-only GitHub receiver; expose only this service through an HTTPS tunnel."""
+"""Signed webhook receiver with an opt-in private-link microphone HTTPS proxy."""
 import hashlib
 import hmac
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
 import re
@@ -9,6 +9,7 @@ import subprocess
 import threading
 from common import config, read
 from webhook_queue import queue_delivery, queue_file
+from mic_proxy import proxy
 
 MAX_BODY = 1024 * 1024
 
@@ -60,9 +61,13 @@ def handler(c, secret, wake):
             self.end_headers()
 
         def do_GET(self):
+            if proxy(self, c):
+                return
             self.reply(204 if self.path == '/health' else 404)
 
         def do_POST(self):
+            if proxy(self, c):
+                return
             if self.path != '/github':
                 return self.reply(404)
             lengths = self.headers.get_all('Content-Length', [])
@@ -106,6 +111,35 @@ def dispatch(c, wake, stop):
             print('Webhook update deferred; durable queue retained.', flush=True)
 
 
+class ReceiverServer(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def __init__(self, *args, **kwargs):
+        self.slots = threading.BoundedSemaphore(12)
+        super().__init__(*args, **kwargs)
+
+    def process_request(self, request, address):
+        if not self.slots.acquire(blocking=False):
+            try:
+                request.settimeout(1)
+                request.sendall(b'HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n')
+            except OSError:
+                pass
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, address)
+        except BaseException:
+            self.slots.release()
+            raise
+
+    def process_request_thread(self, request, address):
+        try:
+            super().process_request_thread(request, address)
+        finally:
+            self.slots.release()
+
+
 def main():
     c = config()
     if c.get('role') != 'pi' or type(c.get('webhook_repository_id')) is not int:
@@ -115,7 +149,7 @@ def main():
         raise ValueError('Webhook signing secret is too short')
     wake, stop = threading.Event(), threading.Event()
     worker = threading.Thread(target=dispatch, args=(c, wake, stop), daemon=True)
-    server = HTTPServer(('127.0.0.1', int(c.get('webhook_port', 8789))), handler(c, secret, wake))
+    server = ReceiverServer(('127.0.0.1', int(c.get('webhook_port', 8789))), handler(c, secret, wake))
     worker.start()
     print('Signed webhook receiver ready on loopback.', flush=True)
     try:
