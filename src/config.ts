@@ -35,6 +35,7 @@ export const config = {
   micCompareCommand: process.env.INKLING_MIC_COMPARE_COMMAND || undefined,
   micReviewModel: process.env.INKLING_MIC_REVIEW_MODEL || undefined,
   micReviewReference: process.env.INKLING_MIC_REVIEW_REFERENCE || undefined,
+  micConversation: process.env.INKLING_MIC_CONVERSATION === "true",
   voiceReplies: process.env.INKLING_VOICE_REPLIES ?? (process.env.INKLING_WHISPER_URL ? "text" : "auto"),
   ttsModel: process.env.INKLING_TTS_MODEL ?? "gpt-4o-mini-tts",
   // Unset: FLUX.1-Kontext-pro on Azure, gpt-image-1 on OpenAI (images.ts).

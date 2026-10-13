@@ -349,3 +349,31 @@ reminder, pending-draft approval or other action runs. Enabling actions needs a 
 Fixtures cover skipped beginnings/endings, collapsed output, missing timing metadata, reminder/negation warnings,
 typed timing checks despite agreement, no fallback, cancellation, identical worker audio, CPU reference selection
 and temporary cleanup. A public-sample Pi-to-laptop smoke verifies transport and execution, not owner accuracy.
+
+## Manual conversation stage
+
+The owner then asked to let the normal conversation model interpret phonetic errors and ask focused clarification
+questions, instead of making every recording pass a transcript audit. `INKLING_MIC_CONVERSATION` is off by default.
+When enabled it uses one warm, separately configured GPU recognizer through the authenticated `/microphone` route,
+then queues an owner-private conversation turn. The previous transcript-only review remains available by disabling
+that option, and Compare remains a manual diagnostic. Nothing listens outside a manual Listen/Done capture.
+
+The deployment uses Hindi-mode turbo, with no automatic-language rewrite and no routine second decode. Keeping a
+warm process removes repeated model loading, but does not guarantee lower decoder time: two public-sample requests
+through the Pi tunnel measured 4.67 and 4.48 seconds, versus roughly six seconds for the earlier sequential review.
+These are transport/ASR measurements, not full conversation latency or accuracy results. Logs now measure Done to
+delivered reply, with transcription, queue and agent durations separated, without audio/transcript content.
+
+The existing chat queue serializes mic and typed turns separately. Source markers survive encrypted pending
+storage and appear in encrypted history. The model gets normal owner context, the original transcript and optional
+coverage warnings, and is instructed to clarify ambiguity that changes a time, amount, person or negation. No LLM
+rewrites speech before interpretation. This cannot prove a fluent transcript preserved every consequential detail.
+If coverage is suspicious, the turn has no tools. Outgoing confirmation, mail-review operations, linking,
+access/admin changes and self-change controls are unavailable to mic turns and rejected at execution too. The
+plain-yes approval shortcut and tweet feedback shortcut also exclude mic turns. Recent mic history cannot supply
+the typed words used to authorize privileged changes. Owner registration is checked again before interpretation.
+
+Fixtures used mocked models and send/action hooks: spoken yes left a pending draft intact; forced unavailable
+tools were refused; coverage warnings removed tools; provenance survived pending/history; one decode ran; cancel
+suppressed enqueueing. No test sent an email, WhatsApp message or invite. Actual conversational quality and full
+reply time still need ordinary owner use before wake-word work.

@@ -1,0 +1,21 @@
+[Unit]
+Description=Warm local microphone recognizer
+After=network-online.target
+
+[Service]
+EnvironmentFile=%h/.config/inkling-mic-whisper.env
+ExecStart=/usr/bin/env ${WHISPER_SERVER} --model ${WHISPER_MODEL} --host 127.0.0.1 --port ${WHISPER_PORT} --threads 2 --beam-size 5
+Restart=on-failure
+RestartSec=3
+UMask=0077
+Nice=10
+MemoryMax=2G
+CPUQuota=200%
+NoNewPrivileges=true
+PrivateTmp=true
+# Some upstream versions print recognized words even when realtime output is disabled.
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=default.target

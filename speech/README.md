@@ -22,6 +22,30 @@ review. Any detected time or reminder wording requires typed timing clarificatio
 These are conservative checks, not a completeness guarantee or a semantic parser. Unrecognized wording may evade
 them, so microphone output stays transcript-only and never enters the agent or confirms a pending draft.
 
+### Manual microphone conversations (optional)
+
+`INKLING_MIC_CONVERSATION=true` replaces the diagnostic double decode with one authenticated `/microphone` request
+through the existing speech gateway. Set `INKLING_WHISPER_MIC_UPSTREAM` on the laptop gateway to a separate warm
+Whisper server on loopback, and `INKLING_WHISPER_MIC_LANGUAGE=hi` (or explicitly choose `auto`/`en`). The existing
+`/transcribe` service/model for WhatsApp voice notes is unchanged. The new route is off without its upstream.
+Use `microphone-whisper.service.example` as a user-service template and a mode-600 environment file containing
+`WHISPER_SERVER`, `WHISPER_MODEL`, and `WHISPER_PORT`; these are absolute binary/model paths and an unused loopback
+port. Build the GPU binary separately, install `quality.py` alongside the gateway, enable the unit, and verify
+authenticated public-sample decoding before enabling conversation mode on the Pi. Upstream output is discarded
+because some Whisper versions print recognized words. No public binding or new public route is needed.
+
+Manual mic transcripts carry a source marker through the encrypted pending queue into the owner's normal private
+chat. They never mix with typed batches or run slash commands. The model receives normal history plus recognition
+warnings, interprets ordinary phonetic errors, and asks targeted questions where uncertainty changes an action.
+There is no blanket typed-time requirement in this mode. Coverage warnings remove all tools for that turn; they
+are conservative activity checks, not a proof of recognition accuracy. A fluent but wrong number can still evade
+them. Outgoing confirmations and access/admin changes are blocked in code, including the plain-yes fast path.
+Mic transcripts are excluded from recent typed words used to authorize privileged changes. Raw audio remains
+transient; intentional conversation transcripts use the usual encrypted history. Wake detection is still off.
+
+The Pi logs only transcription, queue, agent and total reply durations for this path, without recording content.
+Total starts at Done and ends after the text reply is delivered; it includes model/tool work and WhatsApp delivery.
+
 The Pi checks sender access, downloads bounded audio and sends it through an SSH tunnel to `server.py` on a laptop.
 The gateway decodes with FFmpeg and calls an **existing** whisper.cpp HTTP service. It does not run another model
 server. The transcript enters the normal assistant turn, with the same identity, private history, tools and

@@ -65,6 +65,10 @@ function onMessage(msg: InboundMessage): void {
   }
   if (handingOver) return keepPending(msg);
   const user = msg.phone ? findUserByPhone(msg.phone) : undefined;
+  if (msg.source === "microphone") {
+    if (user?.owner && !msg.group) enqueue(msg, user);
+    return;
+  }
 
   // Auto-replies fire on every message in a chat that has them (groups: anyone's message, addressed or not).
   const chatId = msg.group ? groupId(msg.chatJid) : user?.id;
@@ -194,12 +198,12 @@ async function drain(key: string, queue: { busy: boolean; pending: Queued[] }): 
       finally { startedPending([msg]); }
       continue;
     }
-    const boundary = queue.pending.findIndex(item => item.workflow || item.msg.audioError);
-    const batch = queue.pending.splice(0, boundary < 0 ? queue.pending.length : boundary);
+    const boundary = queue.pending.findIndex(item => item.workflow || item.msg.audioError || item.msg.source === "microphone");
+    const batch = queue.pending.splice(0, first.msg.source === "microphone" ? 1 : boundary < 0 ? queue.pending.length : boundary);
     startedPending(batch.map((b) => b.msg));
     const { msg: last, user } = batch.at(-1)!;
     const { chatJid } = last;
-    await markRead(last.key).catch(() => {});
+    if (last.source !== "microphone") await markRead(last.key).catch(() => {});
 
     const chat: Chat = last.group ? await groupChat(key, chatJid, user) : { id: key, user };
     if (last.group) groupContext.delete(chatJid); // folded into this turn's saved history
@@ -209,7 +213,7 @@ async function drain(key: string, queue: { busy: boolean; pending: Queued[] }): 
       batch.length === 1
         ? last.text.replace(new RegExp(`^\\s*(@\\S+|${nameCall().source})[\\s,:]*`, "i"), "").trim().toLowerCase().replace(/\s+/g, " ")
         : "";
-    const answer = await runCommand(chat, chatJid, command);
+    const answer = last.source === "microphone" ? undefined : await runCommand(chat, chatJid, command);
     if (answer !== undefined) {
       if (answer) await sendText(chatJid, answer);
       continue;
@@ -218,7 +222,9 @@ async function drain(key: string, queue: { busy: boolean; pending: Queued[] }): 
     const stopTyping = showTyping(chatJid);
     try {
       const incoming: Incoming[] = batch.map(({ msg, user }) => ({ ...msg, requestId: msg.key.id || undefined, from: user.name }));
-      const reply = await respond(chat, incoming, chatActions(chat, chatJid, last.key));
+      const agentStarted = Date.now();
+      const reply = await respond(chat, incoming, chatActions(chat, chatJid, last.source === "microphone" ? undefined : last.key));
+      const agentMs = Date.now()-agentStarted;
       stopTyping();
       // Local transcription uses text replies. Legacy cloud mode may still speak short replies when configured.
       let spoken = false;
@@ -230,6 +236,9 @@ async function drain(key: string, queue: { busy: boolean; pending: Queued[] }): 
         }
       }
       if (!spoken) await sendReply(chatJid, reply);
+      if (last.source === "microphone" && last.microphone) log.info({ transcriptionMs: last.microphone.transcriptionMs,
+        queueMs: Math.max(0,agentStarted-last.microphone.doneAt-last.microphone.transcriptionMs), agentMs,
+        totalMs: Date.now()-last.microphone.doneAt }, "microphone reply completed");
       // A guest near their daily limit gets the heads-up after the reply.
       const note = guestNotes.get(key);
       if (note) {
@@ -482,6 +491,14 @@ startMicrophone({
     const current = getUsers().find(u => u.id === id && u.owner);
     if (!current || !link.connected || handingOver) throw new Error("Microphone delivery unavailable");
     await sendText(`${current.phone}@s.whatsapp.net`, text, messageId);
+  },
+  converse: async (id, input) => {
+    const current = getUsers().find(u => u.id === id && u.owner);
+    if (!current || !link.connected || handingOver) throw new Error("Microphone conversation unavailable");
+    const chatJid = `${current.phone}@s.whatsapp.net`;
+    onMessage({ source: "microphone", microphone: { doneAt: input.doneAt, transcriptionMs: input.transcriptionMs, warning: input.warning },
+      chatJid, phone: current.phone, senderName: current.name, text: input.text, images: [], plainText: false, at: new Date(),
+      key: { id: `INKMIC${input.id.replaceAll("-", "")}`, remoteJid: chatJid, fromMe: false } });
   },
 });
 // Self-changes report to the owner in their private chat.

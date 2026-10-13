@@ -23,6 +23,8 @@ UPSTREAM = os.environ.get('INKLING_WHISPER_UPSTREAM', 'http://127.0.0.1:8081').r
 MODEL = os.environ.get('INKLING_WHISPER_MODEL', '')
 SECRET = os.environ.get('INKLING_WHISPER_SECRET', '')
 LANGUAGE = os.environ.get('INKLING_WHISPER_LANGUAGE', 'auto')
+MIC_UPSTREAM = os.environ.get('INKLING_WHISPER_MIC_UPSTREAM', '').rstrip('/')
+MIC_LANGUAGE = os.environ.get('INKLING_WHISPER_MIC_LANGUAGE', 'hi')
 UNIT = os.environ.get('INKLING_WHISPER_UNIT', 'whisper-server.service')
 loaded_pid = None
 unavailable_until = 0
@@ -44,9 +46,9 @@ def multipart(fields, filename=None, sound=None):
     return b''.join(parts), f'multipart/form-data; boundary={boundary}'
 
 
-def whisper(route, fields, sound=None):
+def whisper(route, fields, sound=None, upstream=None):
     body, content_type = multipart(fields, 'audio.wav', sound)
-    request = urllib.request.Request(UPSTREAM+route, body, {'Content-Type': content_type})
+    request = urllib.request.Request((upstream or UPSTREAM)+route, body, {'Content-Type': content_type})
     with urllib.request.urlopen(request, timeout=180) as response:
         raw = response.read(256_001)
     if len(raw) > 256_000:
@@ -110,6 +112,25 @@ def transcript(result):
     return {'text': text, 'language': result.get('language'), 'engine': 'whisper.cpp'}
 
 
+def microphone_wav(sound):
+    try:
+        with wave.open(io.BytesIO(sound), 'rb') as audio:
+            if (audio.getframerate(), audio.getnchannels(), audio.getsampwidth()) != (16000, 1, 2):
+                raise Rejected(422)
+            if not .3 <= audio.getnframes()/16000 <= 20:
+                raise Rejected(413)
+            raw = audio.readframes(audio.getnframes())
+            if len(raw) != audio.getnframes()*2:
+                raise Rejected(422)
+        samples = array.array('h', raw)
+        mean = sum(samples)/len(samples)
+        energy = sum(x*x for x in samples)/len(samples)
+        if math.sqrt(energy) < 25 or energy-mean*mean < 1 or sum(abs(x) >= 32700 for x in samples)/len(samples) > .01:
+            raise Rejected(422)
+    except (wave.Error, EOFError):
+        raise Rejected(422)
+
+
 def check_tail(result, wav):
     segments = result.get('segments', [])
     ends = [s['end'] for s in segments if isinstance(s.get('end'), (int, float))]
@@ -161,7 +182,8 @@ class Handler(BaseHTTPRequestHandler):
         global unavailable_until
         if not self.authorized():
             return self.answer(401, {'error': 'unauthorized'})
-        if self.path != '/transcribe':
+        mic = self.path == '/microphone' and bool(MIC_UPSTREAM)
+        if self.path != '/transcribe' and not mic:
             return self.answer(404, {'error': 'not_found'})
         if self.headers.get('Content-Type') != 'application/octet-stream':
             return self.answer(415, {'error': 'unsupported_type'})
@@ -169,7 +191,7 @@ class Handler(BaseHTTPRequestHandler):
             size = int(self.headers.get('Content-Length', '0'))
         except ValueError:
             size = 0
-        if size <= 0 or size > MAX_BYTES:
+        if size <= 0 or size > MAX_BYTES or (mic and size > 644096):
             return self.answer(413, {'error': 'size_limit'})
         if time.monotonic() < unavailable_until or not LOCK.acquire(blocking=False):
             return self.answer(429, {'error': 'busy'})
@@ -178,6 +200,24 @@ class Handler(BaseHTTPRequestHandler):
             sound = self.rfile.read(size)
             if len(sound) != size:
                 raise Rejected(422)
+            if mic:
+                from quality import coverage_warning
+                microphone_wav(sound)
+                started = time.monotonic()
+                result = whisper('/inference', {'language': MIC_LANGUAGE, 'translate': 'false', 'no_context': 'true',
+                    'max_context': '0', 'response_format': 'verbose_json', 'temperature': '0',
+                    'prompt': os.environ.get('INKLING_WHISPER_HINT', 'English and Hindi conversation.')}, sound, MIC_UPSTREAM)
+                answer = transcript(result)
+                # The server emits seconds; the diagnostic CLI emits millisecond offsets.
+                coverage = {'transcription': [{'text': s.get('text', ''), 'offsets':
+                    {'from': s.get('start', -1)*1000, 'to': s.get('end', -1)*1000}}
+                    for s in result.get('segments', [])]}
+                if warning := coverage_warning(coverage, sound, answer['text']):
+                    answer['warning'] = warning
+                answer['seconds'] = round(time.monotonic()-started, 3)
+                self.answer(200, answer)
+                print('Microphone transcription completed.', flush=True)
+                return
             wav = decoded(sound)
             ensure_model()
             result = whisper('/inference', {'language': LANGUAGE, 'translate': 'false', 'no_context': 'true',
@@ -201,6 +241,8 @@ if __name__ == '__main__':
     os.umask(0o077)
     if LANGUAGE not in ('auto', 'en', 'hi'):
         raise SystemExit('Configure language as auto, en or hi.')
+    if MIC_LANGUAGE not in ('auto', 'en', 'hi'):
+        raise SystemExit('Configure microphone language as auto, en or hi.')
     if not SECRET or not Path(MODEL).is_file() or MODEL.endswith('.en.bin'):
         raise SystemExit('Configure a secret and an existing multilingual model.')
     server = ThreadingHTTPServer(('127.0.0.1', int(os.environ.get('INKLING_WHISPER_PORT', '8102'))), Handler)

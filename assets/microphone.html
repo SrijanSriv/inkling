@@ -23,7 +23,7 @@ button:first-child{background:#174b3c;color:white}button:disabled{opacity:.4;cur
 <button id="compare" disabled>Compare recognizers</button>
 <audio id="audio" controls preload="none" hidden></audio>
 <p id="replayNotice"></p>
-<small>First step: transcription only. Nothing you say will run a command or approve anything. Tap Done within 20 seconds. Listen back to compare the actual captured audio with the transcript. Only this latest recording is held in memory until one minute after transcription finishes, with a three-minute maximum after Done; nothing is archived. This link expires in 30 minutes.</small>
+<small id="modeNotice">Transcription check. Tap Done within 20 seconds. Listen back to check the captured audio. The latest recording is held in memory until one minute after transcription finishes, with a three-minute maximum after Done; audio is never archived. This link expires in 30 minutes.</small>
 </main>
 <script>
 const token=location.hash.slice(1);history.replaceState(null,'',location.pathname);
@@ -42,6 +42,7 @@ async function poll(){
  if(stopped)return;
  try{
   const s=await call('/status');
+  document.getElementById('modeNotice').textContent=(s.conversation?'Conversation mode: your transcript goes to the assistant, which can answer or use its normal tools. Room speech cannot approve outgoing drafts or change access/admin settings.':'Transcription check: no assistant actions run.')+' Tap Done within 20 seconds. Listen back is available until one minute after transcription, capped at three minutes after Done. Audio is never archived. Conversation transcripts use your normal encrypted chat history. This link expires in 30 minutes.';
   elements.phase.textContent=s.phase[0].toUpperCase()+s.phase.slice(1);elements.detail.textContent=s.detail;
   elements.level.value=s.level;elements.seconds.textContent=s.seconds.toFixed(1);elements.signal.textContent=s.signal;
   elements.transcript.textContent=(s.transcript?'Heard: '+s.transcript:'')+(s.comparison?'\n\nSame-audio comparison:\n'+s.comparison:'');

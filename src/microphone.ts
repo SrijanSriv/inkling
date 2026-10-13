@@ -8,11 +8,12 @@ import { transcribe } from "./voice.js";
 import { queueVoice, VoiceInputError, voiceErrorText } from "./voice-intake.js";
 import { log } from "./log.js";
 import { reviewMicrophone } from "./microphone-review.js";
+import { transcribeMicrophone } from "./microphone-transcription.js";
 
 const RATE = 16000, MAX_BYTES = RATE * 2 * 20;
 const PAGE = readFileSync(new URL("../assets/microphone.html", import.meta.url), "utf8");
 type Phase = "idle" | "starting" | "listening" | "transcribing" | "comparing" | "sending" | "sent" | "cancelled" | "error";
-type Status = { phase: Phase; detail: string; seconds: number; level: number; signal: string; transcript?: string; id?: string; recordingExpiresAt?: number; canCompare?: boolean; comparison?: string };
+type Status = { phase: Phase; detail: string; seconds: number; level: number; signal: string; transcript?: string; id?: string; recordingExpiresAt?: number; canCompare?: boolean; comparison?: string; conversation?: boolean };
 type Job = { id: string; owner: string; recorder: ChildProcessWithoutNullStreams; chunks: Buffer[]; bytes: number;
   samples: number; sum: number; energy: number; clipped: number; lastFrame: number; start: number;
   closing: boolean; cancelled: boolean; abort: AbortController; deadline: NodeJS.Timeout; watchdog: NodeJS.Timeout };
@@ -22,6 +23,8 @@ export type MicDependencies = {
   record?: () => ChildProcessWithoutNullStreams;
   transcribe?: (audio: Buffer) => Promise<string>;
   compare?: (audio: Buffer, signal: AbortSignal) => Promise<unknown>;
+  decode?: (audio: Buffer, signal: AbortSignal) => Promise<{ text: string; warning?: string }>;
+  converse?: (owner: string, input: { id: string; text: string; warning?: string; doneAt: number; transcriptionMs: number }) => Promise<void>;
 };
 const Comparison = z.object({ results: z.array(z.object({ model: z.string().min(1).max(60), text: z.string().max(16000).optional(),
   seconds: z.number().nonnegative().max(200).optional(), error: z.string().max(200).optional(), warning: z.string().max(200).optional() })).min(2).max(3) });
@@ -51,7 +54,7 @@ export function microphoneWav(pcm: Buffer): Buffer {
   return Buffer.concat([header, pcm]);
 }
 
-/** Stage one is deliberately transcript-only. Room audio never enters the agent or confirms a draft. */
+/** Manual capture is owner-private. Optional conversation mode never confirms outgoing drafts. */
 export class Microphone {
   private sessions = new Map<string, { owner: string; until: number }>();
   private job?: Job;
@@ -83,7 +86,7 @@ export class Microphone {
       this.expires = 0;
     }
     const valid = !!this.recording && Date.now() < this.recording.until;
-    return { ...this.state, recordingExpiresAt: valid ? this.recording!.until : undefined,
+    return { ...this.state, conversation: config.micConversation, recordingExpiresAt: valid ? this.recording!.until : undefined,
       canCompare: valid && !!this.deps.compare && !this.job && !this.comparing };
   }
   private update(patch: Partial<Status>): void { this.state = { ...this.state, ...patch }; }
@@ -214,15 +217,17 @@ export class Microphone {
     this.recording = { owner: job.owner, id: job.id, audio: Buffer.from(audio), until: Date.now() + 180_000,
       timer: setTimeout(() => this.clearRecording(), 180_000) };
     this.recording.timer.unref();
-    this.update({ phase: "transcribing", level: 0, detail: config.micReviewModel
+    this.update({ phase: "transcribing", level: 0, detail: config.micConversation ? `Transcribing your request for ${config.name}…` : config.micReviewModel
       ? "Transcribing and checking a second recognizer. This is a draft, not a verified instruction…"
       : "Transcribing with the existing speech service…" });
     void this.finish(job, audio);
   }
 
   private async finish(job: Job, audio: Buffer): Promise<void> {
+    const doneAt = Date.now();
     try {
       const reviewed = await queueVoice(`microphone-${job.owner}`, async () => {
+        if (config.micConversation) return (this.deps.decode ?? transcribeMicrophone)(audio, job.abort.signal);
         if (config.micReviewModel) {
           if (!config.micReviewReference || !this.deps.compare) throw new VoiceInputError("unavailable");
           const result = Comparison.parse(await this.deps.compare(audio, job.abort.signal));
@@ -232,7 +237,16 @@ export class Microphone {
       });
       if (job.cancelled) return;
       if (!getUsers().some(u => u.id === job.owner && u.owner) || !this.deps.available()) throw new VoiceInputError("unavailable");
-      const { text, clarification } = reviewed;
+      const text = reviewed.text;
+      if (config.micConversation) {
+        if (!this.deps.converse) throw new VoiceInputError("unavailable");
+        const warning = "warning" in reviewed ? reviewed.warning : undefined;
+        this.update({ phase: "sending", transcript: text, detail: `Passing your transcript to ${config.name}…` });
+        await this.deps.converse(job.owner, { id: job.id, text, warning, doneAt, transcriptionMs: Date.now()-doneAt });
+        this.update({ phase: "sent", detail: `Request queued for ${config.name}. A text reply will arrive in your private WhatsApp.` });
+        return;
+      }
+      const clarification = "clarification" in reviewed ? reviewed.clarification : undefined;
       this.update({ phase: "sending", transcript: [text, clarification].filter(Boolean).join("\n\n"), detail: "Transcript ready for review. Sending it to your private WhatsApp…" });
       // Only a later manual request can retry. An uncertain send must not duplicate a notice.
       await this.deps.send(job.owner, `Mic check · Please check what I heard:\n${text}${clarification ? `\n\n${clarification}` : ""}\n\nTranscript only: I haven't acted on these words.`, `INKMIC${job.id.replaceAll("-", "")}`);
@@ -243,6 +257,7 @@ export class Microphone {
         : error instanceof VoiceInputError ? voiceErrorText(error.kind) : "Transcription failed. Nothing was acted on. Please retry." });
       log.warn("microphone request failed");
     } finally {
+      audio.fill(0);
       if (job.cancelled) this.update({ phase: "cancelled", transcript: undefined, detail: "Cancelled. A send already in progress may still arrive; no retry will be made." });
       // Service latency must not consume the entire manual comparison window. Never extend the hard cap.
       const recording = this.recording;
@@ -278,7 +293,7 @@ export class Microphone {
     try { return reply(200, { message: this.control(owner, pathname.slice(1)) }); }
     catch (error) { return reply(409, { error: error instanceof Error ? error.message : "Control unavailable" }); }
   };
-  close(): void { this.comparing?.abort.abort(); if (this.comparing) this.comparing.cancelled = true; this.clearRecording(); if (this.job) { this.job.cancelled = true; if (!this.job.closing) this.stop(this.job, "cancel"); } this.sessions.clear(); }
+  close(): void { this.comparing?.abort.abort(); if (this.comparing) this.comparing.cancelled = true; this.clearRecording(); if (this.job) { this.job.cancelled = true; this.job.abort.abort(); if (!this.job.closing) this.stop(this.job, "cancel"); } this.sessions.clear(); }
 }
 
 let microphone: Microphone | undefined;
