@@ -250,8 +250,8 @@ export class RoomSpeech {
     this.fillerLoaded=true;
     let wav:Buffer|undefined;
     try {
-      wav=await (this.deps.synthesize??synthesizeSpeech)("Hmm.");const pcm=speechPcm(wav);
-      if(pcm.length>48000*1.5)throw new SpeechFailure("invalid_audio");
+      wav=await (this.deps.synthesize??synthesizeSpeech)("Okay, let’s see.");const pcm=speechPcm(wav);
+      if(pcm.length>48000*2.5)throw new SpeechFailure("invalid_audio");
       this.filler=Buffer.from(pcm);
       for(let at=0;at<this.filler.length;at+=2)this.filler.writeInt16LE(Math.round(this.filler.readInt16LE(at)*.45),at);
       log.info("room speech acknowledgement cached");
