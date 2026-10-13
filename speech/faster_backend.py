@@ -2,6 +2,15 @@
 import logging
 
 
+def speech_spans(pcm):
+    """Coverage evidence only: never trim or remove audio supplied to the recognizer."""
+    import numpy as np
+    from faster_whisper.vad import get_speech_timestamps, VadOptions
+    samples = np.frombuffer(pcm, dtype='<i2').astype(np.float32)/32768
+    return [(s['start']/16000,s['end']/16000) for s in get_speech_timestamps(samples,
+        VadOptions(min_speech_duration_ms=250, min_silence_duration_ms=200, speech_pad_ms=0))]
+
+
 class FasterBackend:
     def __init__(self, model):
         from faster_whisper import WhisperModel

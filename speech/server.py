@@ -141,7 +141,18 @@ def validate_microphone(result, sound):
     coverage = {'transcription': [{'text': s.get('text', ''), 'offsets':
         {'from': s.get('start', -1)*1000, 'to': s.get('end', -1)*1000}}
         for s in result.get('segments', [])]}
-    if warning := coverage_warning(coverage, sound, answer['text']):
+    warning = coverage_warning(coverage, sound, answer['text'])
+    # Energy alone flags TV noise, taps and hum. Ask the already installed speech detector only
+    # on suspect clips; keep the conservative warning if detection is unavailable or fails.
+    if warning and warning.startswith('Possible speech ') and result.get('engine') == 'faster-whisper':
+        try:
+            from faster_backend import speech_spans
+            with wave.open(io.BytesIO(sound), 'rb') as audio:
+                spans = speech_spans(audio.readframes(audio.getnframes()))
+            warning = coverage_warning(coverage, sound, answer['text'], spans)
+        except Exception:
+            pass
+    if warning:
         answer['warning'] = warning
     return answer
 
@@ -329,10 +340,11 @@ if __name__ == '__main__':
     if not SECRET or not Path(MODEL).is_file() or MODEL.endswith('.en.bin'):
         raise SystemExit('Configure a secret and an existing multilingual model.')
     if os.environ.get('INKLING_WHISPER_INCREMENTAL_MODEL'):
-        from faster_backend import FasterBackend
+        from faster_backend import FasterBackend, speech_spans
         from incremental import Sessions
         backend = FasterBackend(os.environ['INKLING_WHISPER_INCREMENTAL_MODEL'])
         backend.decode(b'\0'*(16000*2*2), MIC_LANGUAGE, 'English and Hindi conversation.')  # Warm kernels on synthetic silence, never room audio.
+        speech_spans(b'\0'*32000)  # Warm the coverage detector too, before accepting room captures.
 
         def decode_incremental(pcm):
             with GPU_LOCK:

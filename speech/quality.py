@@ -5,13 +5,15 @@ import math
 import wave
 
 
-def coverage_warning(result, sound, text):
+def coverage_warning(result, sound, text, speech_spans=None):
     with wave.open(io.BytesIO(sound), 'rb') as audio:
         rate = audio.getframerate()
         samples = array.array('h', audio.readframes(audio.getnframes()))
     duration = len(samples) / rate
 
     def active_seconds(start, end):
+        if speech_spans is not None:
+            return sum(max(0, min(end, b)-max(start, a)) for a,b in speech_spans)
         section = samples[max(0, int(start * rate)):min(len(samples), int(end * rate))]
         step = rate // 4
         return sum(len(chunk) / rate for i in range(0, len(section), step)
@@ -29,7 +31,7 @@ def coverage_warning(result, sound, text):
     # Whisper can timestamp the entire padded 30-second window for a shorter clip.
     first, last = min(a for a, _ in spans) / 1000, min(duration, max(b for _, b in spans) / 1000)
     if first > 1.5 and active_seconds(0, first - .25) >= 1:
-        return 'Audible activity before the first decoded segment; check for a missing beginning.'
+        return 'Possible speech before the first decoded segment; check for a missing beginning.'
     if duration - last > 1.5 and active_seconds(last + .25, duration) >= 1:
-        return 'Audible activity after the last decoded segment; check for a missing ending.'
+        return 'Possible speech after the last decoded segment; check for a missing ending.'
     return None

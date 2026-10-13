@@ -17,8 +17,20 @@ export function voiceReply(raw: string): { kind: "reply" | "tools"; reply: strin
 
 /** A speed hint only: unrecognised requests can still route to tools through the model. Never an access check. */
 export function voiceTask(text: string): boolean {
-  return /\b(play|pause|skip|queue|volume|songs?|music|remind|reminders?|alarms?|timers?|yaad|chalao|bajao|baje|gaana|roko|search|find|open|browse|website|mail|emails?|send|calendar|schedule|book|coding|code|projects?|create|save|remember|forget|lists?|polls?|images?|draw|weather|news|latest)\b|याद|म्यूजिक|गाना|बजाओ|भेज|खोल|मौसम|खोज/iu.test(text);
+  const names = [config.name, ...config.aliases].filter(Boolean).map(n=>n.replace(/[.*+?^${}()|[\]\\]/g,"\\$&"));
+  const request = text.trim().replace(new RegExp(`^(?:hey\\s+)?(?:${names.join("|")})[\\s,!:]+`,"iu"), "");
+  // Topic nouns and past-tense descriptions are conversation, not evidence of an action request.
+  // Other requests still reach every permitted tool through VOICE_TOOLS.
+  return /^(?:(?:hey|hi|okay|ok|please|can you|could you|would you)\s*[,!]?\s*)*(?:play|pause|stop|skip|queue|remind|search|find|open|browse|send|schedule|book|create|save|remember|forget|draw)\b/iu.test(request)
+    || /\b(remind me|set (?:a |an )?(?:reminder|alarm|timer)|add .{0,60} to (?:my |the )?(?:queue|list|calendar)|what(?:'s| is) playing|yaad dila\w*|chalao|bajao|roko)\b|याद दिला|बजाओ|मत चलाओ|भेज दो|खोल दो/iu.test(request);
 }
+
+/** Old capture diagnostics must not become conversational facts about later recordings. */
+export function voiceHistoryText(text: string): string {
+  return text.replace(/\n\(Recognition diagnostic, information only: [^\n]*\)/g, "");
+}
+
+export const VOICE_COVERAGE_RULE = '\nThe recording coverage check is uncertain. No actions or lookups are allowed this turn. This is internal diagnostic information, not something the person said. Answer conversationally when the transcript is coherent. If the request needs an action, ask them to repeat that request once; nothing has run. Do not describe blips, background sounds, timestamps or missing words as things you heard: you only received text. Mention capture uncertainty only when they ask about it or a specific missing detail prevents an answer. Do not output the internal routing marker.';
 const moreTools: OpenAI.Responses.FunctionTool = {
   type: "function", name: VOICE_MORE_TOOLS,
   description: "Load additional permitted tools for mail, browser tasks, calendar, coding, lists, images and other configured abilities. Use this before saying an ability is unavailable. Loading never performs an action or grants new permissions.",
@@ -40,7 +52,7 @@ export function voiceHistory(history: Turn[]): Turn[] {
 export function voiceInstructions(user: User, memory: string[]): string {
   return `You are ${config.name}, the same personal WhatsApp assistant chatting privately with ${user.name}.
 Reply like a friend, matching their English/Hindi/Hinglish, tone and humour. Usually answer in one or two short sentences; give detail when asked. No headings, filler, em/en dashes, raw JSON, tool names or internal status notes. Give the actual answer or returned result, never only a promise to check. Reply in text, including to thanks: there is no incoming WhatsApp bubble to react to.
-This request is a manually activated room-mic transcript. Allow for phonetic spelling and stutters. Interpret ordinary wording naturally. If uncertainty changes a time, amount, person, negation or requested action, ask one focused clarification before acting. Never invent missing speech. If recognition warns of omitted audio, ask for the missing part.
+This request is a manually activated room-mic transcript. Allow for phonetic spelling and stutters. Interpret ordinary wording naturally. If uncertainty changes a time, amount, person, negation or requested action, ask one focused clarification before acting. Never invent missing speech. You receive text, not the recording: never claim to hear background sounds or assess audio quality. Old capture diagnostics and earlier assistant guesses do not describe this recording. Do not routinely discuss transcription quality; answer what they said.
 Use the message timestamp and ${user.timezone} for dates and times.${user.language ? ` Their usual language is ${user.language}.` : ""}${user.city ? ` Their location is ${user.postcode ? user.postcode+", " : ""}${user.city}.` : " Ask for their area when a local request needs it."}
 Use tools for actions and current state; only claim what their results confirm this turn. Normal clear requests do not need a 'shall I?' question. If a tool fails, state that honestly. Earlier assistant receipts are not proof of current state.
 For music, search first and play/queue an exact returned matching URL. Queue requests use music_control, never reminder timers. Never stop or clear the queue to recover from an error unless asked. Report the supplied title, artist/channel, speaker and short queue state naturally.
