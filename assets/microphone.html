@@ -1,36 +1,39 @@
 <!doctype html>
 <html lang="en">
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="robots" content="noindex,nofollow">
 <title>Talk to your assistant</title>
 <style>
-body{font:18px/1.5 system-ui,sans-serif;max-width:34rem;margin:3rem auto;padding:0 1rem;background:#f3efe7;color:#172d27}
-main{background:white;border-radius:20px;padding:24px}h1{font-size:1.6rem;margin:0 0 8px}#phase{font-weight:700;font-size:1.3rem}
+body{font:18px/1.5 system-ui,sans-serif;max-width:34rem;margin:2rem auto;padding:0 1rem 260px;padding-bottom:calc(28dvh + 80px);background:#f3efe7;color:#172d27}
+h2{font-size:1rem;margin:18px 0 8px}.reply-placeholder{color:#54685f}main{background:white;border-radius:20px;padding:24px}h1{font-size:1.6rem;margin:0 0 8px}#phase{font-weight:700;font-size:1.3rem}
 progress{width:100%;height:20px}button{font:inherit;border-radius:12px;border:1px solid #b8cbc4;padding:12px 20px;margin:6px 6px 6px 0;cursor:pointer}
-.talk-wrap{display:flex;justify-content:center;margin:28px 0 18px}#talk{width:180px;height:180px;border-radius:50%;border:0;background:#174b3c;color:white;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:10px;margin:0;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;box-shadow:0 0 0 10px #e7eee9;transition:background .15s,box-shadow .15s}#talk.held{background:#226b52;box-shadow:0 0 0 14px #c8e4d5}#talk:focus-visible{outline:3px solid #2367b0;outline-offset:14px}#talk svg{width:38px;height:38px;pointer-events:none}#talkLabel{pointer-events:none;font-weight:650}.hold-help{text-align:center;color:#54685f;font-size:.95rem}button:disabled{opacity:.4;cursor:default}#transcript,#latestReply{white-space:pre-wrap}fieldset{border:1px solid #b8cbc4;border-radius:12px;margin:16px 0}fieldset label{display:block;padding:6px 0}#latestReply{background:#edf5ef;padding:16px;border-radius:12px}#replyTime{font-size:.9rem;color:#54685f}small{color:#54685f}
+.talk-wrap{position:fixed;z-index:10000;left:50%;top:80vh;top:80dvh;transform:translate(-50%,-50%);display:flex;align-items:center;flex-direction:column;gap:12px;pointer-events:none}#talk{pointer-events:auto;width:140px;height:140px;border-radius:50%;border:0;background:#174b3c;color:white;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:10px;margin:0;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;box-shadow:0 0 0 8px #f3efe7,0 12px 32px #172d2738;transition:background .15s,box-shadow .15s}#talk.held{background:#226b52;box-shadow:0 0 0 12px #c8e4d5,0 12px 32px #172d2738}#talk:focus-visible{outline:3px solid #2367b0;outline-offset:14px}#talk svg{width:38px;height:38px;pointer-events:none}#talkLabel{pointer-events:none;font-weight:650}.hold-help{text-align:center;color:#54685f;font-size:.95rem}button:disabled{opacity:.4;cursor:default}#transcript,#latestReply{white-space:pre-wrap}fieldset{border:1px solid #b8cbc4;border-radius:12px;margin:16px 0}fieldset label{display:block;padding:6px 0}#latestReply{background:#edf5ef;padding:16px;border-radius:12px}#replyTime{font-size:.9rem;color:#54685f}small{color:#54685f}
+.shortcut-hint{font-size:.8rem;color:#172d27;background:#f3efe7ed;border-radius:20px;padding:4px 12px;white-space:nowrap}@media(max-width:600px){body{margin:1rem auto}main{padding:20px}#talk{width:124px;height:124px}#talk svg{width:32px;height:32px}}@media(max-height:520px){.talk-wrap{top:auto;bottom:max(16px,env(safe-area-inset-bottom));transform:translateX(-50%)}#talk{width:92px;height:92px}#talk svg{width:25px;height:25px}#talkLabel{font-size:.8rem}.talk-wrap{gap:6px}}
 </style>
 <main>
 <h1>Talk to your assistant</h1>
 <fieldset id="micChoices"><legend>Microphone</legend>
 <label><input type="radio" name="mic" value="pi" checked> Mic connected to the Pi</label>
 <label><input type="radio" name="mic" value="device"> This phone or laptop</label>
-</fieldset><p id="permissionNotice">The Pi microphone is selected. Your device microphone stays off.</p>
+</fieldset>
+<section aria-label="Latest assistant reply"><h2>Latest reply</h2><p id="replyPlaceholder" class="reply-placeholder">Your reply will appear here after you speak.</p><p id="latestReply" hidden></p><p id="replyTime"></p></section>
+<p id="permissionNotice">The Pi microphone is selected. Your device microphone stays off.</p>
 <div id="phase" role="status" aria-live="polite">Connecting…</div>
 <p id="detail"></p>
 <progress id="level" max="1" value="0" aria-label="Microphone input level"></progress>
 <p><span id="seconds">0.0</span> seconds · <span id="signal">not checked</span></p>
-<div class="talk-wrap"><button id="talk" type="button" disabled aria-label="Hold to speak, release to send" aria-pressed="false" aria-describedby="holdHelp"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg><span id="talkLabel">Hold to speak</span></button></div>
-<p id="holdHelp" class="hold-help">Hold the circle, wait for Listening, then speak. Release to send. Up to 20 seconds.<br>You can also hold Space or Enter when the circle is focused.</p>
+
+<p id="holdHelp" class="hold-help">Hold the circle, wait for Listening, then speak. Release to send. Up to 20 seconds.<br><span id="keyboardHelp">You can also hold Space or Enter when the circle is focused.</span></p>
 <div><button id="cancel" disabled>Cancel</button></div>
 <p id="transcript"></p>
-<section aria-label="Latest assistant reply"><p id="latestReply" hidden></p><p id="replyTime"></p></section>
 <button id="replay" disabled>Listen back</button>
 <button id="compare" disabled>Compare recognizers</button>
 <audio id="audio" controls preload="none" hidden></audio>
 <p id="replayNotice"></p>
 <small id="modeNotice">Transcription check. Release within 20 seconds. Listen back to check the captured audio. The latest recording is held in memory until one minute after transcription finishes, with a three-minute maximum after release; audio is never archived. This link expires in 30 minutes.</small>
 </main>
+<div class="talk-wrap"><button id="talk" type="button" disabled aria-label="Hold to speak, release to send" aria-pressed="false" aria-describedby="holdHelp"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg><span id="talkLabel">Hold to speak</span></button><span id="shortcutHint" class="shortcut-hint">Hold to speak · release to send</span></div>
 <script type="module">
 import {DeviceMicrophone} from "./microphone-device.js";
 const endpoint=path=>new URL('.'+path,location.href).href;
@@ -117,8 +120,29 @@ window.addEventListener('pointercancel',event=>{if(hold?.pointer===event.pointer
 elements.talk.addEventListener('lostpointercapture',event=>{if(hold?.pointer===event.pointerId&&!hold.released)releaseHold(true);});
 elements.talk.addEventListener('contextmenu',event=>event.preventDefault());
 elements.talk.addEventListener('click',event=>event.preventDefault());
-elements.talk.addEventListener('keydown',event=>{if(![' ','Enter'].includes(event.key))return;event.preventDefault();if(!event.repeat)void startHold(undefined,event.key);});
-window.addEventListener('keyup',event=>{if(hold?.key===event.key){event.preventDefault();releaseHold();}});
+const apple=/Mac|iPhone|iPad|iPod/i.test(navigator.platform||navigator.userAgent);
+const modifier=apple?'Meta':'Control',shortcut=apple?'⌘ Command':'Ctrl';
+document.getElementById('keyboardHelp').textContent=`Hold ${shortcut} anywhere on this page to speak, then release to send. Space or Enter also work when the circle is focused.`;
+document.getElementById('shortcutHint').textContent=`Hold to speak · or hold ${shortcut}`;
+const editing=target=>target instanceof Element&&!!target.closest('input:not([type=radio]):not([type=checkbox]):not([type=button]):not([type=submit]),textarea,select,[contenteditable]:not([contenteditable="false"])');
+window.addEventListener('keydown',event=>{
+ const focusedKey=event.target===elements.talk&&[' ','Enter'].includes(event.key);
+ const modifierKey=event.key===modifier&&!editing(event.target);
+ if(!focusedKey&&!modifierKey)return;
+ if(event.repeat||event.isComposing)return;
+ if(modifierKey&&(event.shiftKey||event.altKey||(apple?event.ctrlKey:event.metaKey)))return;
+ event.preventDefault();void startHold(undefined,event.key);
+});
+window.addEventListener('keyup',event=>{
+ if(hold?.key!==event.key)return;
+ // A second modifier key is still being held: don't submit until both are up.
+ if(event.key===modifier&&(apple?event.metaKey:event.ctrlKey))return;
+ event.preventDefault();releaseHold();
+});
+// Modifier combinations are shortcuts, not intentional speech. Cancel before letting the browser handle them.
+window.addEventListener('keydown',event=>{
+ if(hold?.key===modifier&&event.key!==modifier)releaseHold(true);
+});
 window.addEventListener('blur',()=>releaseHold(true));
 function leavePage(){
  const session=hold;releaseHold(true);
@@ -130,7 +154,7 @@ async function poll(){
  if(stopped)return;
  try{
   const remote=await call('/status');const s=hold?.device&&!hold.released&&localStatus?{...remote,...localStatus}:remote;lastStatus=s;
-  const reply=remote.latestReply;document.getElementById('latestReply').hidden=!reply;document.getElementById('latestReply').textContent=reply?.text||'';
+  const reply=remote.latestReply;document.getElementById('replyPlaceholder').hidden=!!reply;document.getElementById('latestReply').hidden=!reply;document.getElementById('latestReply').textContent=reply?.text||'';
   if(reply&&reply.id!==shownReplyId){shownReplyId=reply.id;shownElapsed=submission?.id===reply.id?performance.now()-submission.start:undefined;}
   document.getElementById('replyTime').textContent=reply?`${((shownElapsed??reply.elapsedMs)/1000).toFixed(1)} seconds ${shownElapsed!==undefined?'from release to the reply appearing here':'from submitting audio to the reply being ready'}${reply.delivered?' · sent to WhatsApp':' · WhatsApp delivery not confirmed'}`:'';
   document.getElementById('modeNotice').textContent=(s.conversation?'Conversation mode: your transcript goes to the assistant, which can answer or use its normal tools. Room speech cannot approve outgoing drafts or change access/admin settings.':'Transcription check: no assistant actions run.')+' Release within 20 seconds. Listen back is available until one minute after transcription, capped at three minutes after release. Audio is never archived. Conversation transcripts use your normal encrypted chat history. This link expires in 30 minutes.';

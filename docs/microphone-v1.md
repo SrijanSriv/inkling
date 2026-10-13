@@ -481,3 +481,14 @@ main web app, browser service or arbitrary upstream is proxied. The signed `/git
 The receiver bounds request threads, bodies, replies and upstream timeouts, and suppresses request logging.
 Set `INKLING_MIC_CONTROL_URL` to the authorised HTTPS origin plus `/mic`; the page resolves API and worklet
 URLs relative to that path. Fresh `/mic` links use the trusted HTTPS address, enabling browser permission prompts.
+
+### Page layout and keyboard hold
+
+The microphone selector comes first, followed by the latest private mic reply and elapsed time, then capture
+status/transcript and diagnostic controls. The hold circle floats above content near 80% of viewport height,
+with responsive sizing, a shorter-screen fallback and bottom scroll space so the last content can be uncovered.
+Hold Command on Mac or Control on Windows/Linux anywhere outside text inputs to use the same capture lifecycle;
+release submits. Repeats do not start another capture. Modifier chords, page loss and focus loss cancel; holding
+both physical modifier keys does not submit until both are released. Space/Enter on the focused circle remain.
+Mocked DOM checks cover both platforms, chord/repeat/focus behaviour and page structure without real recording
+or message delivery.
