@@ -5,11 +5,12 @@ import { z } from "zod";
 if (existsSync(".env")) process.loadEnvFile(".env");
 
 const Effort = z.enum(["none", "minimal", "low", "medium", "high", "xhigh"]);
-const Provider = z.enum(["azure", "openai", "anthropic", "compatible"]);
+const Provider = z.enum(["azure", "openai", "anthropic", "gemini", "compatible"]);
 
 /**
  * Where the models run. "azure" (the recommended default): GPT models on Azure AI Foundry. "openai": OpenAI directly.
- * "anthropic": Claude. "compatible": any server that speaks OpenAI's Responses API, such as a gateway (LiteLLM,
+ * "anthropic": Claude. "gemini": Google's Chat Completions API through gemini.ts.
+ * "compatible": any server that speaks OpenAI's Responses API, such as a gateway (LiteLLM,
  * OpenRouter) in front of other models, or a local server; provider extras (reasoning effort, hosted web search) are
  * left out there.
  */
@@ -23,7 +24,7 @@ export const config = {
   dataDir: path.resolve(process.env.INKLING_DATA_DIR ?? "data"),
   provider,
   // Model names (on Azure, deployment names; by default a deployment is named after its model).
-  model: process.env.INKLING_MODEL ?? (provider === "anthropic" ? "claude-opus-5-5" : "gpt-5-mini"),
+  model: process.env.INKLING_MODEL ?? (provider === "gemini" ? "gemini-3.5-flash-lite" : provider === "anthropic" ? "claude-opus-5-5" : "gpt-5-mini"),
   transcribeModel: process.env.INKLING_TRANSCRIBE_MODEL ?? "gpt-4o-transcribe",
   backgroundReasoning: process.env.INKLING_BACKGROUND_REASONING === "true",
   whisperUrl: process.env.INKLING_WHISPER_URL || undefined,
@@ -46,9 +47,9 @@ export const config = {
   // Unset: FLUX.1-Kontext-pro on Azure, gpt-image-1 on OpenAI (images.ts).
   imageModel: process.env.INKLING_IMAGE_MODEL || undefined,
   // Live web search is the provider's hosted search tool (Azure, OpenAI and Claude have one); off by default elsewhere.
-  webSearch: process.env.INKLING_WEB_SEARCH ? process.env.INKLING_WEB_SEARCH !== "off" : provider !== "compatible",
+  webSearch: process.env.INKLING_WEB_SEARCH ? process.env.INKLING_WEB_SEARCH !== "off" : !["compatible", "gemini"].includes(provider),
   // How hard the model reasons before replying. Which levels exist depends on the model.
-  effort: Effort.parse(process.env.INKLING_EFFORT ?? "medium"),
+  effort: Effort.parse(process.env.INKLING_EFFORT ?? (provider === "gemini" ? "minimal" : "medium")),
   // Web search is billed per search (Grounding with Bing); stop offering it after this many a day.
   dailySearches: Number(process.env.INKLING_DAILY_SEARCHES ?? 50),
   logLevel: process.env.LOG_LEVEL ?? "info",
@@ -86,7 +87,7 @@ export const config = {
   elevenLabsKey: process.env.INKLING_ELEVENLABS_API_KEY || undefined,
   elevenLabsVoice: process.env.INKLING_ELEVENLABS_VOICE ?? "JBFqnCBsd6RMkjVDRZzb",
   elevenLabsModel: process.env.INKLING_ELEVENLABS_MODEL ?? "eleven_flash_v2_5",
-  webModel: process.env.INKLING_WEB_MODEL ?? (provider === "compatible" ? process.env.INKLING_MODEL ?? "gpt-5-mini" : provider === "anthropic" ? "claude-opus-5-5" : "gpt-5.4-mini"),
+  webModel: process.env.INKLING_WEB_MODEL ?? (provider === "gemini" ? process.env.INKLING_MODEL ?? "gemini-3.5-flash-lite" : provider === "compatible" ? process.env.INKLING_MODEL ?? "gpt-5-mini" : provider === "anthropic" ? "claude-opus-5-5" : "gpt-5.4-mini"),
   // Optional analytics (src/analytics.ts, and visit counts on assets/home.html): a PostHog project key. Off when unset.
   posthogKey: process.env.INKLING_POSTHOG_KEY || undefined,
   /** Messages a day a stranger can send in a private chat as a guest (guests.ts). 0, the default, means the waiting list instead. */

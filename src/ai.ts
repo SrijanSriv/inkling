@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import { claudeResponses } from "./claude.js";
+import { geminiResponses } from "./gemini.js";
 import { config } from "./config.js";
 
 // The models. By default (and recommended): GPT models on Azure AI Foundry, through Azure's OpenAI-compatible v1
@@ -11,7 +12,7 @@ let client: OpenAI | undefined;
 
 const azureKeys = () => Boolean(process.env.AZURE_AI_RESOURCE && process.env.AZURE_AI_API_KEY);
 
-/** The OpenAI SDK client for the chat models (every provider except Claude). */
+/** The SDK client for providers with native Responses APIs. Claude and Gemini use their adapters. */
 export function ai(): OpenAI {
   if (client) return client;
   if (config.provider === "azure") {
@@ -25,7 +26,7 @@ export function ai(): OpenAI {
     if (!baseURL) throw new Error("Set INKLING_AI_BASE_URL (and INKLING_AI_API_KEY if it needs one) in .env");
     client = new OpenAI({ baseURL, apiKey: process.env.INKLING_AI_API_KEY || "none" });
   } else {
-    throw new Error("Claude goes through responses(), not the OpenAI client");
+    throw new Error("This provider goes through responses(), not the OpenAI client");
   }
   return client;
 }
@@ -41,9 +42,10 @@ export interface Responses {
   stream(params: ResponseParams): ResponseStream;
 }
 
-/** Model responses from whichever provider is set up. Claude gets translated (claude.ts); the rest speak it natively. */
+/** One model interface: Claude and Gemini are translated by their adapters; the others speak it natively. */
 export function responses(): Responses {
   if (config.provider === "anthropic") return claudeResponses();
+  if (config.provider === "gemini") return geminiResponses();
   return {
     create: (params, options) => ai().responses.create({ ...params, stream: false }, options),
     stream: (params) => {
@@ -57,7 +59,7 @@ export function responses(): Responses {
 }
 
 /** Azure, OpenAI and Claude understand the whole request; compatible servers get plain requests unless opted in. */
-export const fullApi = () => config.provider !== "compatible";
+export const fullApi = () => !["compatible", "gemini"].includes(config.provider);
 
 /**
  * The provider-specific parts of a request, where supported: reasoning effort, encrypted reasoning carried between
@@ -68,6 +70,7 @@ export function tuned(
   effort: OpenAI.ReasoningEffort,
   o: { carry?: boolean; sources?: boolean; cacheKey?: string; terse?: boolean; compatibleReasoning?: boolean } = {},
 ): Partial<Pick<ResponseParams, "reasoning" | "include" | "prompt_cache_key" | "text">> {
+  if (config.provider === "gemini") return { reasoning: { effort } };
   if (!fullApi()) return o.compatibleReasoning ? { reasoning: { effort } } : {};
   const include: OpenAI.Responses.ResponseIncludable[] = [
     ...(o.carry ? (["reasoning.encrypted_content"] as const) : []),

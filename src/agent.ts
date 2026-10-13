@@ -1121,7 +1121,7 @@ export async function respond(chat: Chat, batch: Incoming[], actions: ChatAction
         else if (item.type === "function_call" && SLOW.test(item.name)) acknowledge(ackEmoji(item.name));
       });
       let response = await generation(turn, "reply", config.model, () => stream.finalResponse());
-      if (microphoneTurn) log.info({ step, modelMs: Date.now()-modelStarted,
+      if (microphoneTurn) log.info({ step, provider:config.provider, model:config.model, modelMs: Date.now()-modelStarted,
         mode: microphoneIncomplete ? "coverage" : finishWithoutTools ? "final" : voiceDraft ? "conversation" : "tools",
         toolDefinitions: finishWithoutTools || voiceDraft ? 0 : tools.length,
         inputTokens: response.usage?.input_tokens, cachedTokens: response.usage?.input_tokens_details?.cached_tokens,

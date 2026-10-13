@@ -200,6 +200,7 @@ Pick one provider with `INKLING_AI_PROVIDER`. **The recommended default is `azur
 | **`azure` (recommended)** | GPT on Azure AI Foundry | `AZURE_AI_RESOURCE`, `AZURE_AI_API_KEY` | `gpt-5-mini`; browser agent `gpt-5.4-mini` |
 | `openai` | OpenAI directly | `OPENAI_API_KEY` | the same |
 | `anthropic` | Claude | `ANTHROPIC_API_KEY` | `claude-opus-5-5` for both |
+| `gemini` | Gemini's Chat Completions API, translated through the shared model interface | `GEMINI_API_KEY`, or `INKLING_GEMINI_API_KEY_FILE` pointing to a protected raw-key file | `gemini-3.5-flash-lite` for both; minimal reasoning |
 | `compatible` | any server that speaks OpenAI's Responses API: a gateway such as LiteLLM or OpenRouter in front of other models, or a local server | `INKLING_AI_BASE_URL`, `INKLING_AI_API_KEY` | set `INKLING_MODEL` and `INKLING_WEB_MODEL` |
 
 Change models with `INKLING_MODEL` (chat) and `INKLING_WEB_MODEL` (the browser agent), for example a cheaper Claude
@@ -221,6 +222,12 @@ with `INKLING_MODEL=claude-sonnet-5-5`.
 - **Web search** uses the provider's own search tool (Azure, OpenAI and Claude have one). It's billed per search, so
   it stops after `INKLING_DAILY_SEARCHES` a day (default 50). With `compatible` it's off unless you set
   `INKLING_WEB_SEARCH=on` and your server supports OpenAI's `web_search` tool.
+- **Gemini** supports text, images, structured replies, streamed tool acknowledgements and tool continuations.
+  Hosted search is off and is not supported by this adapter; configured browser tools still work. Local Whisper
+  transcription stays independent of the chat provider. Cloud speech/image generation needs separate Azure or
+  OpenAI credentials, as with Claude. API project quotas/billing are separate from a Google AI subscription;
+  check the project's limits and data terms before enabling it for personal information. Keep raw-key files
+  outside the repository with permissions `600`. Switching providers does not reset stored memory or history.
 - **Voice notes and images** use OpenAI-style audio and image models (`gpt-4o-transcribe`, `gpt-4o-mini-tts`, FLUX on
   Azure or `gpt-image-1` on OpenAI). Claude has neither, so with Claude add Azure or OpenAI keys as well if you want
   them; without, voice notes aren't transcribed and the image tool is hidden.

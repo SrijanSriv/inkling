@@ -256,7 +256,9 @@ async function drain(key: string, queue: { busy: boolean; pending: Queued[] }): 
     } catch (err) {
       stopTyping();
       log.error({ chat: chat.id, err }, "failed to respond");
-      const failure = "Something went wrong on my end. Try again in a minute?";
+      const limited = err && typeof err === "object" && "status" in err && err.status === 429;
+      const failure = limited ? "My AI provider is limiting requests right now. Please try again later."
+        : "Something went wrong on my end. Try again in a minute?";
       let delivered = false;
       await sendText(chatJid, failure).then(()=>{delivered=true;}).catch(() => {});
       if (last.source === "microphone" && last.microphone) microphoneReply(user.id,last.key.id!,failure,Date.now()-last.microphone.doneAt,delivered);
