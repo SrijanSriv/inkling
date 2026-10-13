@@ -3,7 +3,8 @@ export type MicrophoneReview = { text: string; clarification?: string };
 
 const reminder = /remind|reminder|yaad|याद/iu;
 const negative = /\b(?:don't|dont|not|never|mat|nahi)\b|मत|नहीं/iu;
-const timing = /\d|minute|minit|minut|hour|baje|tomorrow|morning|after|before|baad|subah|kal|मिन|घंट|बज|बाद|सुबह|कल/iu;
+// Connectives such as "after this" and casual mentions of tomorrow are not timing requests.
+const timing = /\b(?:minutes?|minits?|minuts?|hours?|baje)\b|मिनट|मिनिट|मिनुत|घंट|बजे|बज़े|\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b|\b\d{1,2}:\d{2}\b/iu;
 
 /** Disagreement is a warning, never a vote or a calibrated confidence score. */
 export function reviewMicrophone(results: Candidate[], primary: string, reference: string): MicrophoneReview {
