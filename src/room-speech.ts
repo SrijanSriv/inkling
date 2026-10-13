@@ -219,10 +219,16 @@ export class RoomSpeech {
   private turn?:{owner:string;id:string;used:boolean;at:number};
   private active?:AbortController;
   private working=false;
+  private filler?:Buffer;
+  private fillerLoaded=false;
+  private fillerTimer?:NodeJS.Timeout;
+  private fillerAbort?:AbortController;
+  private fillerPlaying?:Promise<void>;
   constructor(private deps:RoomSpeechDependencies){
     const owner=getUsers().find(u=>u.owner);
     if(this.configured()&&owner)this.enabled=readSealedJson<{enabled:boolean}>(chatFile(owner.id,"mic-speech.json"),{enabled:false}).enabled===true;
     this.state=this.enabled?"ready":"off";
+    if(this.enabled)void this.warmFiller();
   }
   private configured(){return config.micSpeech&&config.micMuteSwitch&&config.micConversation&&!!config.micSpeechSink
     &&voices.has(config.micSpeechVoice)&&!!config.whisperUrl&&!!config.whisperSecret;}
@@ -234,9 +240,49 @@ export class RoomSpeech {
     if(action==="on"&&!this.configured())throw new Error("Configure the room speech gateway, voice and speaker first.");
     writeSealedJson(chatFile(owner,"mic-speech.json"),{enabled:action==="on"});
     this.enabled=action==="on";this.interrupt();
+    if(this.enabled)void this.warmFiller();
     return this.enabled?"Room speech is on for your physical mic replies. Answers will be audible in the room; WhatsApp text stays on.":"Room speech is off. Mic replies still go to WhatsApp.";
   }
-  interrupt():void {this.turn=undefined;this.active?.abort();this.state=this.enabled?"ready":"off";this.reason="cancelled";}
+  interrupt():void {this.turn=undefined;this.active?.abort();void this.stopFiller();this.state=this.enabled?"ready":"off";this.reason="cancelled";}
+  cancelTurn(owner:string,id:string):void {if(this.turn?.owner===owner&&this.turn.id===id)this.interrupt();}
+  private async warmFiller():Promise<void> {
+    if(!config.micSpeechFiller||this.fillerLoaded||!this.configured())return;
+    this.fillerLoaded=true;
+    let wav:Buffer|undefined;
+    try {
+      wav=await (this.deps.synthesize??synthesizeSpeech)("Hmm.");const pcm=speechPcm(wav);
+      if(pcm.length>48000*1.5)throw new SpeechFailure("invalid_audio");
+      this.filler=Buffer.from(pcm);
+      for(let at=0;at<this.filler.length;at+=2)this.filler.writeInt16LE(Math.round(this.filler.readInt16LE(at)*.45),at);
+      log.info("room speech acknowledgement cached");
+    } catch {log.info("room speech acknowledgement unavailable; normal replies unchanged");}
+    finally {wav?.fill(0);}
+  }
+  private async stopFiller():Promise<void> {
+    clearTimeout(this.fillerTimer);this.fillerTimer=undefined;this.fillerAbort?.abort();
+    await this.fillerPlaying?.catch(()=>{});
+  }
+  sealed(owner:string,id:string):void {
+    const turn=this.turn;
+    if(!config.micSpeechFiller||!turn||turn.owner!==owner||turn.id!==id)return;
+    clearTimeout(this.fillerTimer);
+    this.fillerTimer=setTimeout(()=>{
+      this.fillerTimer=undefined;
+      const valid=()=>this.turn===turn&&this.enabled&&this.owner(owner)&&this.deps.muted();
+      if(!this.filler||!valid()||this.state==="speaking")return;
+      const abort=new AbortController();this.fillerAbort=abort;
+      this.fillerPlaying=(async()=>{
+        let audio:Buffer|undefined;
+        try {
+          await (this.deps.ready??speakerReady)();await (this.deps.quiet??musicQuiet)();
+          if(!valid()||abort.signal.aborted||this.state==="speaking")return;
+          audio=Buffer.from(this.filler!);
+          await (this.deps.play??playSpeech)(audio,abort.signal,()=>log.info({id},"room speech acknowledgement started"));
+        } catch { /* Optional acknowledgement must never fail the actual reply. */ }
+        finally {audio?.fill(0);if(this.fillerAbort===abort){this.fillerAbort=undefined;this.fillerPlaying=undefined;}}
+      })();
+    },1000);this.fillerTimer.unref();
+  }
   capture(owner:string,id:string,physical:boolean):void {
     this.interrupt();
     if(physical&&this.configured()&&this.enabled&&this.owner(owner))this.turn={owner,id,used:false,at:Date.now()};
@@ -246,10 +292,10 @@ export class RoomSpeech {
     if(!turn||turn.used||turn.owner!==owner||turn.id!==id)return;
     turn.used=true;
     const valid=()=>this.turn===turn&&this.enabled&&this.configured()&&this.owner(owner)&&this.deps.muted()&&Date.now()-turn.at<120_000;
-    if(!valid())return;
+    if(!valid()){await this.stopFiller();return;}
     const speech=speechText(text);
-    if(!speech){this.state="unavailable";this.reason="unsupported_text";return;}
-    if(this.working){this.state="unavailable";this.reason="busy";return;}
+    if(!speech){await this.stopFiller();this.state="unavailable";this.reason="unsupported_text";return;}
+    if(this.working){await this.stopFiller();this.state="unavailable";this.reason="busy";return;}
     this.working=true;const abort=new AbortController();this.active=abort;
     let wav:Buffer|undefined,watch:NodeJS.Timeout|undefined,checking=false;
     const started=Date.now();
@@ -269,6 +315,7 @@ export class RoomSpeech {
           muteToPlaybackMs:doneAt===undefined?undefined:Math.max(0,Date.now()-doneAt)},"room speech playback started");
       };
       if(config.micSpeechStreaming){
+        const thisRoom=this;
         const source=(this.deps.stream??synthesizeSpeechChunks)(speech,abort.signal);
         const pcmChunks=async function*(){
           let count=0,bytes=0;
@@ -276,7 +323,7 @@ export class RoomSpeech {
             try {
               const pcm=speechPcm(chunk);bytes+=chunk.length;
               if(!valid())throw new SpeechFailure("cancelled");
-              if(count++===0){await ready();if(!valid())throw new SpeechFailure("cancelled");
+              if(count++===0){await thisRoom.stopFiller();await ready();if(!valid())throw new SpeechFailure("cancelled");
                 log.info({id,firstChunkMs:Date.now()-synthAt,bytes:chunk.length},"room speech first chunk ready");}
               yield pcm;
             } finally {chunk.fill(0);}
@@ -287,7 +334,7 @@ export class RoomSpeech {
       } else {
         wav=await (this.deps.synthesize??synthesizeSpeech)(speech);
         log.info({id,synthesisMs:Date.now()-synthAt,bytes:wav.length},"room speech synthesized");
-        const pcm=speechPcm(wav);await ready();if(!valid())throw new SpeechFailure("cancelled");
+        const pcm=speechPcm(wav);await this.stopFiller();await ready();if(!valid())throw new SpeechFailure("cancelled");
         watchPlayback();await (this.deps.play??playSpeech)(pcm,abort.signal,playbackStarted);
       }
       if(abort.signal.aborted)throw new SpeechFailure("cancelled");
@@ -297,6 +344,6 @@ export class RoomSpeech {
       const reason=error instanceof SpeechFailure?error.reason:"playback_failed";
       if(this.turn===turn){this.state=this.enabled?(reason==="cancelled"?"ready":"unavailable"):"off";this.reason=reason;}
       log.info({id,reason},"room speech skipped or stopped");
-    } finally {clearInterval(watch);wav?.fill(0);if(this.active===abort)this.active=undefined;this.working=false;}
+    } finally {if(this.turn===turn)await this.stopFiller();clearInterval(watch);wav?.fill(0);if(this.active===abort)this.active=undefined;this.working=false;}
   }
 }

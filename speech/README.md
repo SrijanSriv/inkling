@@ -1,5 +1,19 @@
 # Local voice notes
 
+### Optional waiting acknowledgement
+
+`INKLING_MIC_SPEECH_FILLER=true` on the Pi enables one quiet cached "hmm" one second after a valid physical
+recording is sealed by mute. The existing room-speech owner preference must also be enabled. The sound is
+generated once when room speech starts, validated as at most 1.5 seconds, kept only in RAM and attenuated
+to 45% amplitude. There is no language-model call or per-turn synthesis for the acknowledgement.
+
+No acknowledgement plays if its cache is unavailable, the owner/mute checks fail, music is active or the
+speaker is unavailable. Fast replies cancel the timer when their audio is ready. The actual reply aborts
+any acknowledgement and waits for its player to close before starting, avoiding two voices at once.
+New unmute, source loss, disabling speech or a turn error cancel it too. It is never repeated or sent to
+WhatsApp and does not claim understanding or tool success. The real answer and its timing logs are unchanged.
+Disable the flag and restart Ellie to remove this waiting cue; it does not accelerate transcription or reasoning.
+
 ## Optional room speech output
 
 The gateway also supports `/synthesize` when `INKLING_TTS_UPSTREAM=http://127.0.0.1:8880` and

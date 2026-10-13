@@ -33,6 +33,7 @@ export const config = {
   micWarmInput: process.env.INKLING_MIC_WARM_INPUT === "true",
   micMuteSwitch: process.env.INKLING_MIC_MUTE_SWITCH === "true",
   micSpeechStreaming: process.env.INKLING_MIC_SPEECH_STREAMING === "true",
+  micSpeechFiller: process.env.INKLING_MIC_SPEECH_FILLER === "true",
   micSpeech: process.env.INKLING_MIC_SPEECH === "true",
   micSpeechSink: process.env.INKLING_MIC_SPEECH_SINK || undefined,
   micSpeechVoice: process.env.INKLING_MIC_SPEECH_VOICE ?? "af_bella",

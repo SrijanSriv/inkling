@@ -26,6 +26,7 @@ type Job = { physical?: boolean; id: string; owner: string; recorder?: ChildProc
 export type MicDependencies = {
   interrupt?: ()=>void;
   capture?: (owner:string,id:string,physical:boolean)=>void;
+  sealed?: (owner:string,id:string)=>void;
   speechStatus?: ()=>{state:string;reason?:string};
   available: () => boolean;
   send: (owner: string, text: string, id: string) => Promise<void>;
@@ -108,7 +109,9 @@ export class Microphone {
       }
     },()=>{
       const job=this.job;
-      if(job?.physical&&!job.closing){this.stop(job,"done");log.info("physical microphone mute inferred; capture sealed");}
+      if(job?.physical&&!job.closing){this.stop(job,"done");
+        if(this.job===job)this.deps.sealed?.(job.owner,`INKMIC${job.id.replaceAll("-", "")}`);
+        log.info("physical microphone mute inferred; capture sealed");}
     });
     if((config.micWarmInput||config.micMuteSwitch)&&config.micSource){
       const frame=(frame:Buffer)=>{

@@ -223,11 +223,13 @@ async function drain(key: string, queue: { busy: boolean; pending: Queued[] }): 
     }
 
     const stopTyping = showTyping(chatJid);
+    let answerReady=false;
     try {
       const incoming: Incoming[] = batch.map(({ msg, user }) => ({ ...msg, requestId: msg.key.id || undefined, from: user.name }));
       const agentStarted = Date.now();
       const reply = await respond(chat, incoming, chatActions(chat, chatJid, last.source === "microphone" ? undefined : last.key));
       const agentMs = Date.now()-agentStarted;
+      answerReady=true;
       stopTyping();
       if(last.source==="microphone"&&!last.group&&last.key.id)void roomSpeech.reply(user.id,last.key.id,reply,last.microphone?.doneAt)
         .catch(()=>log.warn("room speech unavailable"));
@@ -260,6 +262,7 @@ async function drain(key: string, queue: { busy: boolean; pending: Queued[] }): 
       }
     } catch (err) {
       stopTyping();
+      if(!answerReady&&last.source==="microphone"&&last.key.id)roomSpeech.cancelTurn(user.id,last.key.id);
       log.error({ chat: chat.id, err }, "failed to respond");
       const limited = err && typeof err === "object" && "status" in err && err.status === 429;
       const failure = limited ? "My AI provider is limiting requests right now. Please try again later."
@@ -515,6 +518,7 @@ startMemoryUpkeep();
 startMicrophone({
   interrupt:()=>roomSpeech.interrupt(),
   capture:(owner,id,physical)=>roomSpeech.capture(owner,id,physical),
+  sealed:(owner,id)=>roomSpeech.sealed(owner,id),
   speechStatus:()=>roomSpeech.status(),
   available: () => link.connected && !handingOver,
   send: async (id, text, messageId) => {
