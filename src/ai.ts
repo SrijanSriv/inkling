@@ -56,18 +56,19 @@ export function responses(): Responses {
   };
 }
 
-/** Azure, OpenAI and Claude understand the whole request (reasoning effort, web search); other servers get plain ones. */
+/** Azure, OpenAI and Claude understand the whole request; compatible servers get plain requests unless opted in. */
 export const fullApi = () => config.provider !== "compatible";
 
 /**
  * The provider-specific parts of a request, where supported: reasoning effort, encrypted reasoning carried between
  * tool steps (`carry`, needed with store: false), web search sources, a prompt cache key and short replies.
+ * Compatible reasoning is a narrow explicit opt-in; it never enables the other provider extras.
  */
 export function tuned(
   effort: OpenAI.ReasoningEffort,
-  o: { carry?: boolean; sources?: boolean; cacheKey?: string; terse?: boolean } = {},
+  o: { carry?: boolean; sources?: boolean; cacheKey?: string; terse?: boolean; compatibleReasoning?: boolean } = {},
 ): Partial<Pick<ResponseParams, "reasoning" | "include" | "prompt_cache_key" | "text">> {
-  if (!fullApi()) return {};
+  if (!fullApi()) return o.compatibleReasoning ? { reasoning: { effort } } : {};
   const include: OpenAI.Responses.ResponseIncludable[] = [
     ...(o.carry ? (["reasoning.encrypted_content"] as const) : []),
     ...(o.sources ? (["web_search_call.action.sources"] as const) : []),

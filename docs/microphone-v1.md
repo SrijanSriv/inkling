@@ -391,6 +391,23 @@ watchdog cancels abandoned holds without transcription. Stale IDs and releases a
 This bounds recording when a browser disappears before it can send a stop request. The existing 20-second capture
 limit remains. Legacy operator Listen/Done controls still work but do not receive the hold lease.
 
+### Mic model latency tuning
+
+Timing records for the two latest ordinary mic turns showed 4.4–4.8 seconds in transcription, 7.4–7.9 seconds in
+the agent with no tools called, 2–3 milliseconds in the chat queue, and under 0.1 seconds sending. This identifies
+the agent and transcription as the significant stages; the backend timer excludes browser-to-Pi release transit
+and phone receipt after WhatsApp accepts the send. Tool-bearing requests can take substantially longer.
+
+The compatible-provider default previously omitted the effort setting. `INKLING_MIC_EFFORT` now explicitly opts
+mic turns into a chosen effort, forwarding only `reasoning.effort` for compatible Responses endpoints. It is off
+until configured; typed turns keep their existing behavior. The deployment uses `low`, accepted by the actual
+Z.ai Responses endpoint. One small public-question pair measured 3.435 seconds with defaults versus 1.769 with
+low effort. This is a compatibility/smoke result, not an end-to-end speed guarantee or an accuracy evaluation.
+Mic turns also skip the concurrent emoji-triage call, which had no incoming WhatsApp bubble to react to. Its full
+duration was never a sequential part of the response path; removing it saves a request and potential contention.
+Mocked-model fixtures verify low effort through tool-loop steps, zero mic triage calls, unchanged typed/default
+compatible behavior and continued refusal of spoken approval. No fixture sent a message or executed a live tool.
+
 DOM fixtures covered quick release before the start response, pointer loss/cancellation, page departure after
 release, keyboard repeats, unrelated pointers, and exactly one capture-bound submit. Fake-clock recorder fixtures
 covered lease expiry, renewal, stale IDs and expired release, with no real audio capture or message delivery.

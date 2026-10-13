@@ -1066,7 +1066,8 @@ export async function respond(chat: Chat, batch: Incoming[], actions: ChatAction
     ack.done = true;
     actions.react(emoji).catch((err) => log.warn({ err }, "couldn't send acknowledgement reaction"));
   };
-  void quickAck(messages, turn)
+  // A mic turn has no incoming WhatsApp bubble to react to, so triage would be a wasted model call.
+  if (!microphoneTurn) void quickAck(messages, turn)
     // Just the emoji: some models add a word ("📅 plans").
     .then((r) => r.react && r.emoji.trim() && acknowledge(r.emoji.trim().split(/\s+/)[0]))
     .catch((err) => log.warn({ err }, "quick acknowledgement check failed"));
@@ -1093,7 +1094,9 @@ export async function respond(chat: Chat, batch: Incoming[], actions: ChatAction
         tools: finishWithoutTools ? [] : tools,
         // Nothing is stored on the provider's side; reasoning comes back encrypted so the turn can continue.
         store: false,
-        ...tuned(config.effort, { carry: true, sources: true, cacheKey: `inkling-${chat.id}`, terse: true }),
+        ...tuned(microphoneTurn && config.micEffort ? config.micEffort : config.effort,
+          { carry: true, sources: true, cacheKey: `inkling-${chat.id}`, terse: true,
+            compatibleReasoning: microphoneTurn && !!config.micEffort }),
       });
       // Streaming shows the moment a search or tool starts, so the acknowledgement lands within a second or two.
       stream.on("response.output_item.added", ({ item }) => {

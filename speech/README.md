@@ -46,6 +46,12 @@ transient; intentional conversation transcripts use the usual encrypted history.
 The Pi logs only transcription, queue, agent and total reply durations for this path, without recording content.
 Total starts at Done and ends after the text reply is delivered; it includes model/tool work and WhatsApp delivery.
 
+`INKLING_MIC_EFFORT=low` optionally tunes the main model on mic turns, including subsequent tool-loop steps.
+For compatible Responses endpoints this explicitly forwards only `reasoning.effort`; configure it only after
+verifying support. Other compatible requests remain plain, and typed turns retain their normal settings.
+Mic turns skip the separate emoji-triage model call because there is no incoming WhatsApp bubble to react to.
+The owner/private source checks and outgoing approval restrictions do not depend on model effort.
+
 The Pi checks sender access, downloads bounded audio and sends it through an SSH tunnel to `server.py` on a laptop.
 The gateway decodes with FFmpeg and calls an **existing** whisper.cpp HTTP service. It does not run another model
 server. The transcript enters the normal assistant turn, with the same identity, private history, tools and
