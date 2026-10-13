@@ -30,6 +30,8 @@ export const config = {
   whisperUrl: process.env.INKLING_WHISPER_URL || undefined,
   whisperSecret: process.env.INKLING_WHISPER_SECRET || undefined,
   micSource: process.env.INKLING_MIC_SOURCE || undefined,
+  micWarmInput: process.env.INKLING_MIC_WARM_INPUT === "true",
+  micMuteSwitch: process.env.INKLING_MIC_MUTE_SWITCH === "true",
   micControlUrl: process.env.INKLING_MIC_CONTROL_URL?.replace(/\/$/, "") || undefined,
   micHost: process.env.INKLING_MIC_HOST ?? "127.0.0.1",
   micPort: Number(process.env.INKLING_MIC_PORT ?? 8792),

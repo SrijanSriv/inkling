@@ -63,7 +63,7 @@ function drawControls(s=lastStatus){
  const capturing=s&&['starting','listening'].includes(s.phase),busy=s?.busy||capturing||s&&['transcribing','comparing','sending'].includes(s.phase);
  document.getElementById('live').disabled=!!hold||!!busy||requesting||stopped;
  micChoices.disabled=!!hold||!!busy||requesting||stopped;
- elements.talk.disabled=stopped||(selectedMic()==='device'&&!deviceReady)||(hold?hold.released:!!busy||requesting);
+ elements.talk.disabled=stopped||(selectedMic()==='pi'&&s?.piReady===false)||(selectedMic()==='device'&&!deviceReady)||(hold?hold.released:!!busy||requesting);
  elements.cancel.disabled=stopped||(hold?hold.released:!busy||requesting);
  elements.compare.disabled=stopped||!s?.canCompare||requesting||!!hold;
  elements.replay.disabled=stopped||!recordingUntil||requesting||!!hold;
@@ -125,6 +125,7 @@ async function startHold(pointer,key){
  try{
   const params=new URLSearchParams();if(session.device)params.set('source','device');if(session.incremental)params.set('incremental','true');
   const result=await call('/hold'+(params.size?'?'+params:''),'POST');if(!result.id)throw new Error('Recording could not be confirmed. It will cancel automatically.');session.id=result.id;
+  if(!session.device&&result.phase){lastStatus={...lastStatus,phase:result.phase};elements.phase.textContent=result.phase==='listening'?'Listening':'Starting';elements.detail.textContent=result.detail||result.message;}
   if(!session.released)session.timer=setInterval(async()=>{
    if(session.renewing||session.released)return;session.renewing=true;
    try{await call('/held?id='+encodeURIComponent(session.id),'POST');}
@@ -181,11 +182,12 @@ async function poll(){
  try{
   const remote=await call('/status');const s=hold?.device&&!hold.released&&localStatus?{...remote,...localStatus}:remote;lastStatus=s;
   document.getElementById('liveChoice').hidden=!remote.incrementalAvailable;if(!remote.incrementalAvailable)document.getElementById('live').checked=false;
+  if(selectedMic()==='pi'&&remote.piReady!==undefined)permissionNotice.textContent=remote.piReady?'Pi microphone ready. Hold the circle to speak. Your device microphone stays off.':'The Pi microphone is reconnecting. Your device microphone stays off.';
   document.getElementById('partial').textContent=remote.partial&&!remote.transcript?'Draft hearing: '+remote.partial:'';
   const reply=remote.latestReply;document.getElementById('replyPlaceholder').hidden=!!reply;document.getElementById('latestReply').hidden=!reply;document.getElementById('latestReply').textContent=reply?.text||'';
   if(reply&&reply.id!==shownReplyId){shownReplyId=reply.id;shownElapsed=submission?.id===reply.id?performance.now()-submission.start:undefined;}
   document.getElementById('replyTime').textContent=reply?`${((shownElapsed??reply.elapsedMs)/1000).toFixed(1)} seconds ${shownElapsed!==undefined?'from release to the reply appearing here':'from submitting audio to the reply being ready'}${reply.delivered?' · sent to WhatsApp':' · WhatsApp delivery not confirmed'}`:'';
-  document.getElementById('modeNotice').textContent=(s.conversation?'Conversation mode: your transcript goes to the assistant, which can answer or use its normal tools. Room speech cannot approve outgoing drafts or change access/admin settings.':'Transcription check: no assistant actions run.')+' Release within 20 seconds. Listen back is available until one minute after transcription, capped at three minutes after release. Audio is never archived. Conversation transcripts use your normal encrypted chat history. This link expires in 30 minutes.';
+  document.getElementById('modeNotice').textContent=(s.conversation?'Conversation mode: your transcript goes to the assistant, which can answer or use its normal tools. Room speech cannot approve outgoing drafts or change access/admin settings.':'Transcription check: no assistant actions run.')+(remote.muteSwitch?' Physical mic switch (owner): '+remote.muteSwitch+'. Unmute to speak, mute to send. Send /mic switch off in private chat to use only the page button.':'')+' Release within 20 seconds. Listen back is available until one minute after transcription, capped at three minutes after release. Audio is never archived. Conversation transcripts use your normal encrypted chat history. This link expires in 30 minutes.';
   elements.phase.textContent=s.phase[0].toUpperCase()+s.phase.slice(1);elements.detail.textContent=s.detail;
   elements.level.value=s.level;elements.seconds.textContent=s.seconds.toFixed(1);elements.signal.textContent=s.signal;
   elements.transcript.textContent=(s.transcript?'Heard: '+s.transcript:'')+(s.comparison?'\n\nSame-audio comparison:\n'+s.comparison:'');

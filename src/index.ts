@@ -17,7 +17,7 @@ import { botPhone, groupInfo, link, markRead, releaseWhatsApp, nameCall, react, 
 import { startOperationNotifications } from "./operations.js";
 import { startReadingNotifications } from "./reading-sharing.js";
 import { mailReviewEnabled, startMailReview } from "./mail-review.js";
-import { microphoneLink, microphoneReply, startMicrophone } from "./microphone.js";
+import { microphoneLink, microphoneReply, microphoneMuteSwitch, startMicrophone } from "./microphone.js";
 import { speak } from "./voice.js";
 import { voiceErrorText } from "./voice-intake.js";
 import { startScheduler, type RunJob } from "./schedule.js";
@@ -356,6 +356,10 @@ const runJob: RunJob = async (target, prompt) => {
 /** Commands are handled here, never by the model, so sign-in links and account changes don't go through the model. */
 async function runCommand(chat: Chat, chatJid: string, command: string): Promise<string | undefined> {
   const { user, group } = chat;
+  if (/^\/mic switch (on|off)$/.test(command)) {
+    if(group||!user.owner||!getUsers().some(u=>u.id===user.id&&u.owner))return "Physical mic-switch controls are owner-only in private chat.";
+    try {return microphoneMuteSwitch(user.id,command.endsWith(" on"));} catch(error) {return error instanceof Error?error.message:"Mic-switch control unavailable.";}
+  }
   if (command === "/mic") {
     if (group || isGuest(user) || !getUsers().some(u => u.id === user.id)) return "Microphone controls are available in registered private chats.";
     const url = microphoneLink(user.id);

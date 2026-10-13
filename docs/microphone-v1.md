@@ -500,3 +500,46 @@ With `INKLING_MIC_INCREMENTAL=true` and the optional laptop backend configured, 
 uses a complete final decode, with existing coverage warnings, private context and spoken-approval restrictions.
 The current recognizer stays available as fallback. This is available for registered private chats, for both
 the Pi mic and supported phone/laptop mics. See [the implementation plan and measured outcome](incremental-transcription-plan.md#12-implemented-v1-and-measured-decision).
+
+### Optional warm input and physical transmitter mute control
+
+`INKLING_MIC_WARM_INPUT=true` keeps one `pw-record` input ready. Idle PCM is discarded locally; no idle audio
+reaches Whisper, the chat provider, WhatsApp or disk. Pressing the page button begins a bounded capture from
+that already-open input. Its HTTP response now supplies the listening state immediately, instead of waiting
+for the next half-second status poll. Pending samples before a manual press are discarded; the final partial
+frame is retained on release. Device-mic permissions and capture remain independent.
+
+`INKLING_MIC_MUTE_SWITCH=true` adds an experimental signal-driven control for the registered owner and implies
+warm input. This is appropriate only for a receiver tested to produce exact digital zeros while muted and
+nonzero samples even during quiet pauses while unmuted. In a hardware check, the transmitter's physical mute
+was not reflected in Linux's capture-switch control and exposed no USB input-button interface. While unmuted,
+the signal stayed nonzero continuously through quiet pauses; muting returned it to zeros. No diagnostic audio
+was saved or transcribed. This is evidence for that tested receiver, not a capability claim for other microphones.
+
+The controller first requires one second of zeros, ignoring startup transients. Two nonzero 100 ms frames start
+capture, retaining both frames so debounce does not lose the first syllable. Three zero frames finish capture.
+The existing WAV validation, optional incremental transcription, encrypted private conversation and outgoing
+approval restrictions apply. It does not identify speakers: the operator explicitly assigns this physical room
+control to the owner. Registered page users still have their own isolated captures and replies.
+
+The cap remains 20 seconds. Overlong recordings are discarded rather than submitting a truncated request or
+silently starting another one. A busy/failed attempt requires another mute/unmute cycle; USB loss or a stalled
+recorder cancels rather than submits. Errors generate at most one private notice per capture, without automatic
+retries. The normal rate limit applies. Owner status on the page shows the switch state. Typed owner-private
+commands `/mic switch off` and `/mic switch on` disable/rearm this control; their preference is encrypted in the
+owner's `mic-switch.sealed` and survives restarts. Off keeps warm input available for the page button. Groups,
+other registered users and room speech cannot change this setting.
+
+There is an important limit: wireless transmitter power loss or radio dropout can resemble digital mute. This
+receiver provides no independent mute event to prove the distinction. This mode remains experimental; a real
+hardware mute/button event would be preferable if a future receiver supports it. The page button is still an
+explicit alternative.
+
+Software auto-mute after one minute is intentionally deferred. Linux's mute is separate from the transmitter's
+switch: muting the host input would hide the signal used to notice a physical unmute, leaving the controller
+unable to wake itself. A silence timeout is also not the same as a mute event. This implementation neither
+changes host gain/mute nor tries to remotely unmute the transmitter.
+
+Isolated fixtures covered startup while unmuted, quiet pauses, short zero glitches, first-frame preservation,
+owner routing, busy cross-user isolation, disabling, size limits, rearming and disconnect cancellation. Warm
+page fixtures also checked pre-press pending data is discarded and the final partial frame survives release.
