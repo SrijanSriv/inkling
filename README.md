@@ -9,6 +9,11 @@ Optional local voice-note transcription: run the [private speech gateway](speech
 whisper.cpp server on another machine. Registered users can speak English or Hindi/English and get text replies;
 the Pi keeps the normal chat permissions and encrypted history.
 
+Optional Pi microphone calibration: the owner's private **`/mic`** command opens a short-lived home-network
+Listen/Done page. It records the Pi microphone only while requested, shows input levels, and sends the actual
+Whisper transcript to the owner's WhatsApp without acting on it. This first stage has no wake-word detector or
+automatic assistant answer. See [the microphone design and acceptance plan](docs/microphone-v1.md).
+
 A personal assistant that lives in WhatsApp, for you and a few friends. You text it the way you'd text a friend, on
 your own or in a group chat, and it texts back. Each person gets their own private conversation, memory and
 connected accounts.

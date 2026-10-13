@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Microphone check</title>
+<style>
+body{font:18px/1.5 system-ui,sans-serif;max-width:34rem;margin:3rem auto;padding:0 1rem;background:#f3efe7;color:#172d27}
+main{background:white;border-radius:20px;padding:24px}h1{font-size:1.6rem;margin:0 0 8px}#phase{font-weight:700;font-size:1.3rem}
+progress{width:100%;height:20px}button{font:inherit;border-radius:12px;border:1px solid #b8cbc4;padding:12px 20px;margin:6px 6px 6px 0;cursor:pointer}
+button:first-child{background:#174b3c;color:white}button:disabled{opacity:.4;cursor:default}#transcript{white-space:pre-wrap}small{color:#54685f}
+</style>
+<main>
+<h1>Microphone check</h1>
+<p>Uses the microphone connected to the Pi. Your phone microphone stays off.</p>
+<div id="phase" role="status" aria-live="polite">Connecting…</div>
+<p id="detail"></p>
+<progress id="level" max="1" value="0" aria-label="Microphone input level"></progress>
+<p><span id="seconds">0.0</span> seconds · <span id="signal">not checked</span></p>
+<div><button id="listen" disabled>Listen</button><button id="done" disabled>Done</button><button id="cancel" disabled>Cancel</button></div>
+<p id="transcript"></p>
+<small>First step: transcription only. Nothing you say will run a command or approve anything. Tap Done within 20 seconds. This link expires in 30 minutes; the displayed transcript clears after a minute.</small>
+</main>
+<script>
+const token=location.hash.slice(1);history.replaceState(null,'',location.pathname);
+const elements=Object.fromEntries(['phase','detail','level','seconds','signal','listen','done','cancel','transcript'].map(id=>[id,document.getElementById(id)]));
+let stopped=false,requesting=false;
+async function call(path,method='GET'){
+ const response=await fetch(path,{method,headers:{Authorization:'Bearer '+token},cache:'no-store',signal:AbortSignal.timeout(5000)});
+ const data=await response.json();
+ if(response.status===403){stopped=true;throw new Error(data.error);}
+ if(!response.ok)throw new Error(data.error||'Connection unavailable');return data;
+}
+function disable(){for(const id of ['listen','done','cancel'])elements[id].disabled=true;}
+async function poll(){
+ if(stopped)return;
+ try{
+  const s=await call('/status');
+  elements.phase.textContent=s.phase[0].toUpperCase()+s.phase.slice(1);elements.detail.textContent=s.detail;
+  elements.level.value=s.level;elements.seconds.textContent=s.seconds.toFixed(1);elements.signal.textContent=s.signal;
+  elements.transcript.textContent=s.transcript?'Heard: '+s.transcript:'';
+  const capturing=['starting','listening'].includes(s.phase),busy=capturing||['transcribing','sending'].includes(s.phase);
+  elements.listen.disabled=busy||requesting;elements.done.disabled=!capturing||requesting;elements.cancel.disabled=!busy||requesting;
+ }catch(error){disable();elements.phase.textContent='Unavailable';elements.detail.textContent=error.message;elements.level.value=0;elements.transcript.textContent='';}
+ if(!stopped)setTimeout(poll,500);
+}
+for(const action of ['listen','done','cancel'])elements[action].onclick=async()=>{
+ requesting=true;disable();
+ try{const result=await call('/'+action,'POST');elements.detail.textContent=result.message;}
+ catch(error){elements.detail.textContent=error.message;}
+ finally{requesting=false;}
+};
+if(!token){stopped=true;elements.phase.textContent='Link needed';elements.detail.textContent='Send /mic in your private WhatsApp chat for a fresh link.';}
+else poll();
+</script>
+</html>

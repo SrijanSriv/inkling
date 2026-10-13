@@ -28,6 +28,10 @@ export const config = {
   backgroundReasoning: process.env.INKLING_BACKGROUND_REASONING === "true",
   whisperUrl: process.env.INKLING_WHISPER_URL || undefined,
   whisperSecret: process.env.INKLING_WHISPER_SECRET || undefined,
+  micSource: process.env.INKLING_MIC_SOURCE || undefined,
+  micControlUrl: process.env.INKLING_MIC_CONTROL_URL?.replace(/\/$/, "") || undefined,
+  micHost: process.env.INKLING_MIC_HOST ?? "127.0.0.1",
+  micPort: Number(process.env.INKLING_MIC_PORT ?? 8792),
   voiceReplies: process.env.INKLING_VOICE_REPLIES ?? (process.env.INKLING_WHISPER_URL ? "text" : "auto"),
   ttsModel: process.env.INKLING_TTS_MODEL ?? "gpt-4o-mini-tts",
   // Unset: FLUX.1-Kontext-pro on Azure, gpt-image-1 on OpenAI (images.ts).

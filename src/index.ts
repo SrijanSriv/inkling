@@ -17,6 +17,7 @@ import { botPhone, groupInfo, link, markRead, releaseWhatsApp, nameCall, react, 
 import { startOperationNotifications } from "./operations.js";
 import { startReadingNotifications } from "./reading-sharing.js";
 import { mailReviewEnabled, startMailReview } from "./mail-review.js";
+import { microphoneLink, startMicrophone } from "./microphone.js";
 import { speak } from "./voice.js";
 import { voiceErrorText } from "./voice-intake.js";
 import { startScheduler, type RunJob } from "./schedule.js";
@@ -333,6 +334,11 @@ const runJob: RunJob = async (target, prompt) => {
 /** Commands are handled here, never by the model, so sign-in links and account changes don't go through the model. */
 async function runCommand(chat: Chat, chatJid: string, command: string): Promise<string | undefined> {
   const { user, group } = chat;
+  if (command === "/mic") {
+    if (group || !getUsers().some(u => u.id === user.id && u.owner)) return "Microphone controls are only available in the owner's private chat.";
+    const url = microphoneLink(user.id);
+    return url ? `Open this on home Wi-Fi, tap Listen, then Done. I'll send the exact transcript here. This first step won't act on your words.\n${url}` : "Microphone controls aren't configured or available yet.";
+  }
   // Admin commands: "/add Sam +44 7700 900042", "/remove Sam", and in groups "/open" or "/close".
   if (user.admin && group) {
     const open =
@@ -470,6 +476,14 @@ startPersonalWorker(async (userId, text) => {
 });
 startScheduler(runJob);
 startMemoryUpkeep();
+startMicrophone({
+  available: () => link.connected && !handingOver,
+  send: async (id, text, messageId) => {
+    const current = getUsers().find(u => u.id === id && u.owner);
+    if (!current || !link.connected || handingOver) throw new Error("Microphone delivery unavailable");
+    await sendText(`${current.phone}@s.whatsapp.net`, text, messageId);
+  },
+});
 // Self-changes report to the owner in their private chat.
 const owner = getUsers().find((u) => u.owner);
 if (owner) startCodingNotifications(owner.id, notifyPerson(owner), () => link.connected);
