@@ -411,3 +411,30 @@ compatible behavior and continued refusal of spoken approval. No fixture sent a 
 DOM fixtures covered quick release before the start response, pointer loss/cancellation, page departure after
 release, keyboard repeats, unrelated pointers, and exactly one capture-bound submit. Fake-clock recorder fixtures
 covered lease expiry, renewal, stale IDs and expired release, with no real audio capture or message delivery.
+
+### Optional compact mic conversations
+
+`INKLING_MIC_COMPACT=true` enables a shorter prompt for owner-private room-mic turns only. It keeps every saved
+personal note and the existing recap, and includes the last twelve history messages beginning with a user turn.
+This is a prompt window, not data deletion: encrypted history remains intact. `recall` searches both stored recent
+and archived messages, scoped to the current chat, plus the existing configured article memory. Typed chats keep
+their normal prompt and tools.
+
+Ordinary conversation gets one response from the same model with no tool definitions. When it needs a lookup or
+action, an internal routing marker loads the existing permitted tools and continues the normal tool loop. Code
+never executes model-written command text or JSON. Obvious task wording bypasses that first conversation step;
+these turns start with common tools and can load the remaining permitted definitions. Unknown tasks can still
+route through the model, at the cost of another model request. Loading tools grants no permissions, and calls
+are checked against the definitions offered for that particular response. Mic approval and incomplete-capture
+restrictions continue to apply. Internal routing markers are suppressed from final replies.
+
+In a small alternating comparison on the deployed provider, short conversational replies took 2.199 and 2.392
+seconds with this path, versus 4.994 and 4.976 seconds with the normal prompt/tools. Merely shrinking the tool
+menu did not reliably improve latency; the tool-free conversation step did in this sample. Transcription was
+unchanged. These are model-stage observations, not an end-to-end guarantee; tool requests, longer replies and
+provider variability still matter.
+
+Mocked fixtures covered preservation of all notes and recent context, chat-isolated recall, natural one-call
+replies, lazy tool loading, refusal of unoffered calls even beside a loader call, command text never executing,
+spoken approval remaining blocked and unchanged typed turns. Real model smoke checks covered a recent follow-up,
+older-memory routing and browser routing without executing any tool or sending any message.

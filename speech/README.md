@@ -129,3 +129,8 @@ negative instruction. These are smoke checks, not a representative accuracy eval
 References: [original fine-tune](https://huggingface.co/Oriserve/Whisper-Hindi2Hinglish-Swift), [Whisper server](https://github.com/ggml-org/whisper.cpp/tree/master/examples/server),
 [audio format and model sizes](https://github.com/ggml-org/whisper.cpp),
 [Hindi-English code-switching research](https://www.isca-archive.org/interspeech_2025/biswas25_interspeech.pdf).
+
+Owner-private room-mic conversations can optionally use `INKLING_MIC_COMPACT=true`: ordinary replies use a shorter
+prompt and one tool-free model response, while tasks load the same permitted tools. All personal notes remain
+in context; older conversation remains encrypted and searchable. This does not change WhatsApp voice-note
+transcription or the recognizer. See [mic architecture and measurements](../docs/microphone-v1.md#optional-compact-mic-conversations).

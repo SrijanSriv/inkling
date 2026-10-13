@@ -4,7 +4,7 @@ import { responses, tuned } from "./ai.js";
 import { generation, startTurn } from "./analytics.js";
 import { config, getUsers } from "./config.js";
 import { log } from "./log.js";
-import { chatFile, groupIds, loadArchive, loadMemory, loadRecap, saveMemory, saveRecap } from "./store.js";
+import { chatFile, groupIds, loadArchive, loadHistory, loadMemory, loadRecap, saveMemory, saveRecap } from "./store.js";
 import { readSealedJson, writeSealedJson } from "./vault.js";
 import { recallReading } from "./reading-library.js";
 
@@ -50,7 +50,8 @@ export function recall(chatId: string, query: string): string {
   const reading = recallReading(chatId, query);
   const words = [...new Set(query.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? [])];
   if (!words.length) return "Give a few words to search for.";
-  const archive = loadArchive(chatId);
+  // Compact voice prompts omit some still-recent turns; they must remain discoverable too.
+  const archive = [...loadArchive(chatId), ...loadHistory(chatId)];
   const hits = archive
     .map((t, i) => {
       const text = t.content.toLowerCase();
