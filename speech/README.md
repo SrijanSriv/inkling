@@ -11,6 +11,16 @@ quality score. Run English and natural Hindi/English trials before replacing the
 Use `--model-language Label=auto` (or `en`/`hi`) when candidates need different language settings. In particular,
 the tested Swift fine-tune uses `en`, while a general multilingual model should also be evaluated with `auto` for
 mixed Hindi/English speech. Forcing every model to `en` does not establish its best code-switching performance.
+Keep `quality.py` beside this worker. It adds conservative coverage warnings; audio activity is not proof of speech,
+and decoder timestamps can cover audio whose words were omitted. `--model-cpu Label` keeps a reference on CPU when
+the supplied CLI also supports CUDA. Warnings preserve the original candidate text rather than rewriting it.
+
+Optional microphone review uses `INKLING_MIC_REVIEW_MODEL` and `INKLING_MIC_REVIEW_REFERENCE`, exact labels from
+the comparison worker. This only affects manual Pi mic captures, not WhatsApp voice notes. The selected primary
+provides a draft transcript, while reference errors, coverage warnings and reminder/negation disagreement prompt
+review. Any detected time or reminder wording requires typed timing clarification even when both models agree.
+These are conservative checks, not a completeness guarantee or a semantic parser. Unrecognized wording may evade
+them, so microphone output stays transcript-only and never enters the agent or confirms a pending draft.
 
 The Pi checks sender access, downloads bounded audio and sends it through an SSH tunnel to `server.py` on a laptop.
 The gateway decodes with FFmpeg and calls an **existing** whisper.cpp HTTP service. It does not run another model

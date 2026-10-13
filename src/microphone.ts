@@ -7,6 +7,7 @@ import { config, getUsers } from "./config.js";
 import { transcribe } from "./voice.js";
 import { queueVoice, VoiceInputError, voiceErrorText } from "./voice-intake.js";
 import { log } from "./log.js";
+import { reviewMicrophone } from "./microphone-review.js";
 
 const RATE = 16000, MAX_BYTES = RATE * 2 * 20;
 const PAGE = readFileSync(new URL("../assets/microphone.html", import.meta.url), "utf8");
@@ -14,7 +15,7 @@ type Phase = "idle" | "starting" | "listening" | "transcribing" | "comparing" | 
 type Status = { phase: Phase; detail: string; seconds: number; level: number; signal: string; transcript?: string; id?: string; recordingExpiresAt?: number; canCompare?: boolean; comparison?: string };
 type Job = { id: string; owner: string; recorder: ChildProcessWithoutNullStreams; chunks: Buffer[]; bytes: number;
   samples: number; sum: number; energy: number; clipped: number; lastFrame: number; start: number;
-  closing: boolean; cancelled: boolean; deadline: NodeJS.Timeout; watchdog: NodeJS.Timeout };
+  closing: boolean; cancelled: boolean; abort: AbortController; deadline: NodeJS.Timeout; watchdog: NodeJS.Timeout };
 export type MicDependencies = {
   available: () => boolean;
   send: (owner: string, text: string, id: string) => Promise<void>;
@@ -23,7 +24,7 @@ export type MicDependencies = {
   compare?: (audio: Buffer, signal: AbortSignal) => Promise<unknown>;
 };
 const Comparison = z.object({ results: z.array(z.object({ model: z.string().min(1).max(60), text: z.string().max(16000).optional(),
-  seconds: z.number().nonnegative().max(200).optional(), error: z.string().max(200).optional() })).min(2).max(3) });
+  seconds: z.number().nonnegative().max(200).optional(), error: z.string().max(200).optional(), warning: z.string().max(200).optional() })).min(2).max(3) });
 
 /** Trusted configuration supplies argv, never a model or HTTP caller. Audio goes only through stdin. */
 export async function compareMicrophone(audio: Buffer, signal: AbortSignal): Promise<unknown> {
@@ -119,6 +120,7 @@ export class Microphone {
     if (!job || job.owner !== owner) throw new Error("There is no microphone request in progress.");
     if (action === "cancel") {
       job.cancelled = true;
+      job.abort.abort();
       this.clearRecording();
       if (!job.closing) this.stop(job, "cancel");
       else this.update({ detail: "Cancelled. Waiting for the current service call to finish; no new result will be sent." });
@@ -133,7 +135,7 @@ export class Microphone {
       const result = Comparison.parse(await this.deps.compare!(audio, comparison.abort.signal));
       if (comparison.cancelled) return;
       if (!getUsers().some(u => u.id === owner && u.owner) || !this.deps.available()) throw new Error("Comparison delivery unavailable");
-      const text = result.results.map(r => `${r.model}${r.seconds !== undefined ? ` (${r.seconds.toFixed(1)} seconds)` : ""}:\n${r.text?.trim() || "No usable result"}`).join("\n\n");
+      const text = result.results.map(r => `${r.model}${r.seconds !== undefined ? ` (${r.seconds.toFixed(1)} seconds)` : ""}:\n${r.text?.trim() || "No usable result"}${r.warning ? `\nCheck: ${r.warning}` : ""}`).join("\n\n");
       this.update({ phase: "sending", comparison: text, detail: "Sending the comparison to your private WhatsApp…" });
       await this.deps.send(owner, `Mic comparison · Same recording\n\n${text}\n\nCompare with what you actually said. Neither result is automatically correct. Nothing was acted on.`, `INKMICCMP${randomUUID().replaceAll("-", "")}`);
       this.update({ phase: "sent", detail: "Comparison sent. Check which words each recognizer got right or wrong." });
@@ -152,7 +154,7 @@ export class Microphone {
     this.clearRecording();
     const recorder = this.deps.record?.() ?? spawn("pw-record", ["--raw", "--target", config.micSource!, "--rate", String(RATE), "--channels", "1", "--format", "s16", "-"], { stdio: "pipe" });
     const job = { id: randomUUID(), owner, recorder, chunks: [], bytes: 0, samples: 0, sum: 0, energy: 0, clipped: 0,
-      start: Date.now(), lastFrame: Date.now(), closing: false, cancelled: false } as unknown as Job;
+      start: Date.now(), lastFrame: Date.now(), closing: false, cancelled: false, abort: new AbortController() } as unknown as Job;
     this.job = job;
     this.stateOwner = owner;
     this.state = { phase: "starting", detail: "Opening the Pi microphone…", seconds: 0, level: 0, signal: "not checked", id: job.id };
@@ -212,18 +214,28 @@ export class Microphone {
     this.recording = { owner: job.owner, id: job.id, audio: Buffer.from(audio), until: Date.now() + 180_000,
       timer: setTimeout(() => this.clearRecording(), 180_000) };
     this.recording.timer.unref();
-    this.update({ phase: "transcribing", level: 0, detail: "Transcribing with the existing speech service…" });
+    this.update({ phase: "transcribing", level: 0, detail: config.micReviewModel
+      ? "Transcribing and checking a second recognizer. This is a draft, not a verified instruction…"
+      : "Transcribing with the existing speech service…" });
     void this.finish(job, audio);
   }
 
   private async finish(job: Job, audio: Buffer): Promise<void> {
     try {
-      const text = await queueVoice(`microphone-${job.owner}`, () => this.deps.transcribe?.(audio) ?? transcribe(audio, "audio/wav"));
+      const reviewed = await queueVoice(`microphone-${job.owner}`, async () => {
+        if (config.micReviewModel) {
+          if (!config.micReviewReference || !this.deps.compare) throw new VoiceInputError("unavailable");
+          const result = Comparison.parse(await this.deps.compare(audio, job.abort.signal));
+          return reviewMicrophone(result.results, config.micReviewModel, config.micReviewReference);
+        }
+        return { text: await (this.deps.transcribe?.(audio) ?? transcribe(audio, "audio/wav")), clarification: undefined };
+      });
       if (job.cancelled) return;
       if (!getUsers().some(u => u.id === job.owner && u.owner) || !this.deps.available()) throw new VoiceInputError("unavailable");
-      this.update({ phase: "sending", transcript: text, detail: "Transcript ready. Sending it to your private WhatsApp…" });
+      const { text, clarification } = reviewed;
+      this.update({ phase: "sending", transcript: [text, clarification].filter(Boolean).join("\n\n"), detail: "Transcript ready for review. Sending it to your private WhatsApp…" });
       // Only a later manual request can retry. An uncertain send must not duplicate a notice.
-      await this.deps.send(job.owner, `Mic check · I heard:\n${text}\n\nTranscript only: I haven't acted on these words.`, `INKMIC${job.id.replaceAll("-", "")}`);
+      await this.deps.send(job.owner, `Mic check · Please check what I heard:\n${text}${clarification ? `\n\n${clarification}` : ""}\n\nTranscript only: I haven't acted on these words.`, `INKMIC${job.id.replaceAll("-", "")}`);
       this.update({ phase: "sent", detail: "Transcript sent to your private WhatsApp. Check it matches what you said." });
     } catch (error) {
       this.update({ phase: "error", detail: this.state.phase === "sending"

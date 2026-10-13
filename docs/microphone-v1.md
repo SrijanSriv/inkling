@@ -321,3 +321,31 @@ This supports a human comparison, not a production-model switch. The deployed di
 with turbo (`auto`) and turbo (`hi`) on the same recording, using the separate CUDA CLI for all three. These new
 timings must not be attributed solely to the model when comparing with earlier CPU trials. Hindi decoding may
 produce Devanagari; do not rewrite output into Romanized Hindi or English to conceal recognition mistakes.
+
+## Automatic mic review after the recognition failures
+
+The owner subsequently confirmed that a missing beginning was audible in Listen back: capture succeeded and the
+recognizer omitted words. Another Hindi/English test corrupted the requested delay in both turbo variants; the
+Swift GPU comparison returned only one unrelated word. English-only turbo success therefore cannot justify
+unattended reminder creation, and neither model agreement nor fluent text establishes accuracy.
+
+`INKLING_MIC_REVIEW_MODEL` and `INKLING_MIC_REVIEW_REFERENCE` opt manual captures into an automatic same-audio
+review through the configured comparison worker. The selected primary supplies the exact draft, never an LLM
+rewrite or a majority-voted transcript. Missing primary output fails without silently using a fallback. Cancellation
+aborts the worker and suppresses a delivery not already started. The owner is rechecked before delivery.
+
+The deployment uses Hindi-mode turbo for the draft and the Swift reference on CPU. This is a provisional,
+human-reviewed mic path, not a proven recognizer upgrade. Auto-language turbo is excluded because it repeatedly
+lost reminder intent. WhatsApp voice notes continue to use the existing gateway unchanged.
+
+`speech/quality.py` warns on very little text despite substantial audio activity, or activity outside reported
+decoder segments. Activity can be TV, music or noise; timestamps can falsely span omitted speech. These checks
+cannot guarantee completeness. Missing timing metadata is disclosed rather than treated as a successful check.
+Reminder or negation disagreement prompts clarification. Any detected time/reminder wording requires typed
+timing clarification even if both decoders agree. This deliberately avoids guessing corrupted number words, but
+unrecognized wording can evade those patterns. All microphone output remains transcript-only: no agent turn,
+reminder, pending-draft approval or other action runs. Enabling actions needs a separate reviewed-text flow.
+
+Fixtures cover skipped beginnings/endings, collapsed output, missing timing metadata, reminder/negation warnings,
+typed timing checks despite agreement, no fallback, cancellation, identical worker audio, CPU reference selection
+and temporary cleanup. A public-sample Pi-to-laptop smoke verifies transport and execution, not owner accuracy.

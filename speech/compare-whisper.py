@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 import wave
+from quality import coverage_warning
 
 
 def comparison_text(result):
@@ -23,10 +24,12 @@ def comparison_text(result):
     return text
 
 
-def compare(sound, executable, models, language='en', prompt='', temp_root='/dev/shm', model_languages=None):
+def compare(sound, executable, models, language='en', prompt='', temp_root='/dev/shm', model_languages=None, cpu_models=()):
     model_languages = model_languages or {}
     if any(label not in dict(models) or lang not in ('en', 'auto', 'hi') for label, lang in model_languages.items()):
         raise ValueError('Invalid per-model language setting')
+    if any(label not in dict(models) for label in cpu_models):
+        raise ValueError('Invalid CPU model label')
     if len(sound) > 644096:
         raise ValueError('Recording exceeds the diagnostic size limit')
     with wave.open(io.BytesIO(sound), 'rb') as audio:
@@ -49,13 +52,20 @@ def compare(sound, executable, models, language='en', prompt='', temp_root='/dev
                        '-t', '2', '-bs', '5', '-oj', '-of', str(output)]
             if prompt:
                 command.extend(['--prompt', prompt])
+            if label in cpu_models:
+                command.append('--no-gpu')
             try:
                 subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=90, check=True)
                 raw = output.with_suffix('.json').read_bytes()
                 if len(raw) > 1000000:
                     raise ValueError('Oversized diagnostic output')
-                text = comparison_text(json.loads(raw))
-                results.append({'model': label, 'language': selected_language, 'text': text, 'seconds': round(time.monotonic()-started, 3)})
+                parsed = json.loads(raw)
+                text = comparison_text(parsed)
+                item = {'model': label, 'language': selected_language, 'text': text,
+                        'seconds': round(time.monotonic()-started, 3)}
+                if warning := coverage_warning(parsed, sound, text):
+                    item['warning'] = warning
+                results.append(item)
             except (OSError, ValueError, subprocess.SubprocessError):
                 results.append({'model': label, 'error': 'Comparison failed; no result to assess'})
             finally:
@@ -72,6 +82,7 @@ if __name__ == '__main__':
     parser.add_argument('--language', choices=['en', 'auto', 'hi'], default='en')
     parser.add_argument('--model-language', action='append', default=[], help='Label=en|auto|hi; override language for a specific candidate')
     parser.add_argument('--prompt', default='', help='Same neutral vocabulary hint for every candidate; never the expected answer')
+    parser.add_argument('--model-cpu', action='append', default=[], help='Exact model label to keep on CPU; repeat if needed')
     args = parser.parse_args()
     try:
         models = [tuple(item.split('=', 1)) for item in args.model]
@@ -79,7 +90,7 @@ if __name__ == '__main__':
             raise ValueError('Supply two or three existing model paths')
         languages = dict(item.split('=', 1) for item in args.model_language)
         print(json.dumps(compare(sys.stdin.buffer.read(644097), args.cli, models, args.language, args.prompt,
-                                 os.environ.get('INKLING_WHISPER_TMP', '/dev/shm'), languages), ensure_ascii=False))
+                                 os.environ.get('INKLING_WHISPER_TMP', '/dev/shm'), languages, args.model_cpu), ensure_ascii=False))
     except (OSError, ValueError, wave.Error, EOFError):
         print(json.dumps({'error': 'Diagnostic failed. Check WAV format, duration, RAM temporary directory and configured model paths.'}))
         sys.exit(2)
