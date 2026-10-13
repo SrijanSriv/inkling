@@ -2,6 +2,7 @@ import http from "node:http";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { z } from "zod";
 import { config, getUsers } from "./config.js";
 import { transcribe } from "./voice.js";
 import { queueVoice, VoiceInputError, voiceErrorText } from "./voice-intake.js";
@@ -9,8 +10,8 @@ import { log } from "./log.js";
 
 const RATE = 16000, MAX_BYTES = RATE * 2 * 20;
 const PAGE = readFileSync(new URL("../assets/microphone.html", import.meta.url), "utf8");
-type Phase = "idle" | "starting" | "listening" | "transcribing" | "sending" | "sent" | "cancelled" | "error";
-type Status = { phase: Phase; detail: string; seconds: number; level: number; signal: string; transcript?: string; id?: string; recordingExpiresAt?: number };
+type Phase = "idle" | "starting" | "listening" | "transcribing" | "comparing" | "sending" | "sent" | "cancelled" | "error";
+type Status = { phase: Phase; detail: string; seconds: number; level: number; signal: string; transcript?: string; id?: string; recordingExpiresAt?: number; canCompare?: boolean; comparison?: string };
 type Job = { id: string; owner: string; recorder: ChildProcessWithoutNullStreams; chunks: Buffer[]; bytes: number;
   samples: number; sum: number; energy: number; clipped: number; lastFrame: number; start: number;
   closing: boolean; cancelled: boolean; deadline: NodeJS.Timeout; watchdog: NodeJS.Timeout };
@@ -19,7 +20,24 @@ export type MicDependencies = {
   send: (owner: string, text: string, id: string) => Promise<void>;
   record?: () => ChildProcessWithoutNullStreams;
   transcribe?: (audio: Buffer) => Promise<string>;
+  compare?: (audio: Buffer, signal: AbortSignal) => Promise<unknown>;
 };
+const Comparison = z.object({ results: z.array(z.object({ model: z.string().min(1).max(60), text: z.string().max(16000).optional(),
+  seconds: z.number().nonnegative().max(200).optional(), error: z.string().max(200).optional() })).min(2).max(3) });
+
+/** Trusted configuration supplies argv, never a model or HTTP caller. Audio goes only through stdin. */
+export async function compareMicrophone(audio: Buffer, signal: AbortSignal): Promise<unknown> {
+  const argv = z.array(z.string().min(1).max(4096)).min(1).max(30).parse(JSON.parse(config.micCompareCommand!));
+  return new Promise((resolve, reject) => {
+    const child = spawn(argv[0], argv.slice(1), { stdio: "pipe", signal });
+    const output: Buffer[] = []; let bytes = 0;
+    const timeout = setTimeout(() => { child.kill("SIGTERM"); reject(new Error("Microphone comparison timed out")); }, 195_000);
+    child.stdout.on("data", (chunk: Buffer) => { bytes += chunk.length; if (bytes > 64_000) { child.kill("SIGTERM"); reject(new Error("Comparison output too large")); } else output.push(chunk); });
+    child.stderr.resume(); child.stdin.on("error", () => {}); child.stdin.end(audio);
+    child.once("error", () => { clearTimeout(timeout); reject(new Error("Microphone comparison unavailable")); });
+    child.once("close", code => { clearTimeout(timeout); try { if (code !== 0) throw new Error(); resolve(JSON.parse(Buffer.concat(output).toString())); } catch { reject(new Error("Microphone comparison failed")); } });
+  });
+}
 export const microphoneEnabled = () => !!config.micSource && !!config.micControlUrl && !!config.whisperUrl && !!config.whisperSecret;
 
 /** PCM gets one ordinary WAV header. No temporary recording or shell command is needed. */
@@ -41,6 +59,8 @@ export class Microphone {
   private stateOwner?: string;
   private arrivals: number[] = [];
   private recording?: { owner: string; id: string; audio: Buffer; until: number; timer: NodeJS.Timeout };
+  private comparing?: { cancelled: boolean; abort: AbortController };
+  private comparisonArrivals: number[] = [];
   constructor(private deps: MicDependencies) {}
 
   linkFor(owner: string): string {
@@ -57,11 +77,13 @@ export class Microphone {
   }
   status(owner?: string): Status {
     if (owner && this.stateOwner && owner !== this.stateOwner) return { phase: "idle", detail: "Tap Listen for a new recording.", seconds: 0, level: 0, signal: "not checked" };
-    if (!this.job && this.expires && Date.now() > this.expires) {
+    if (!this.job && !this.comparing && this.expires && Date.now() > this.expires) {
       this.state = { phase: "idle", detail: "Tap Listen for a new recording.", seconds: 0, level: 0, signal: "not checked" };
       this.expires = 0;
     }
-    return { ...this.state, recordingExpiresAt: this.recording && Date.now() < this.recording.until ? this.recording.until : undefined };
+    const valid = !!this.recording && Date.now() < this.recording.until;
+    return { ...this.state, recordingExpiresAt: valid ? this.recording!.until : undefined,
+      canCompare: valid && !!this.deps.compare && !this.job && !this.comparing };
   }
   private update(patch: Partial<Status>): void { this.state = { ...this.state, ...patch }; }
   private clearRecording(): void {
@@ -70,9 +92,24 @@ export class Microphone {
 
   control(owner: string, action: string): string {
     if (!getUsers().some(u => u.id === owner && u.owner)) throw new Error("Microphone controls are owner-private.");
+    if (action === "compare") {
+      const recording = this.recording;
+      if (!this.deps.compare || !recording || recording.owner !== owner || Date.now() >= recording.until) throw new Error("Make a new recording, then compare within one minute of Done.");
+      if (this.job || this.comparing) throw new Error("Wait for the current microphone request to finish.");
+      this.comparisonArrivals = this.comparisonArrivals.filter(at => Date.now() - at < 600_000);
+      if (this.comparisonArrivals.length >= 4) throw new Error("Comparison limit reached. Try again in a few minutes.");
+      this.comparisonArrivals.push(Date.now());
+      const comparison = { cancelled: false, abort: new AbortController() }; this.comparing = comparison;
+      this.update({ phase: "comparing", detail: "Comparing the same captured audio. No expected words are supplied; this may take a minute.", comparison: undefined });
+      void this.compareRecording(owner, Buffer.from(recording.audio), comparison); return "Comparison started.";
+    }
+    if (action === "cancel" && this.comparing) {
+      this.comparing.cancelled = true; this.comparing.abort.abort(); this.clearRecording();
+      this.update({ detail: "Cancelling comparison. No new result will be sent." }); return "Cancelling comparison.";
+    }
     if (action === "listen") {
       if (!this.deps.available()) throw new Error("WhatsApp is unavailable. Try when the assistant reconnects.");
-      if (this.job) throw new Error("A microphone request is already in progress. Wait or cancel it.");
+      if (this.job || this.comparing) throw new Error("A microphone request is already in progress. Wait or cancel it.");
       this.arrivals = this.arrivals.filter(at => Date.now() - at < 600_000);
       if (this.arrivals.length >= 12) throw new Error("Too many microphone requests. Try again in a few minutes.");
       this.arrivals.push(Date.now());
@@ -89,6 +126,26 @@ export class Microphone {
     }
     if (action === "done" && !job.closing) { this.stop(job, "done"); return "Finishing capture."; }
     throw new Error("That control is unavailable at this stage.");
+  }
+
+  private async compareRecording(owner: string, audio: Buffer, comparison: { cancelled: boolean; abort: AbortController }): Promise<void> {
+    try {
+      const result = Comparison.parse(await this.deps.compare!(audio, comparison.abort.signal));
+      if (comparison.cancelled) return;
+      if (!getUsers().some(u => u.id === owner && u.owner) || !this.deps.available()) throw new Error("Comparison delivery unavailable");
+      const text = result.results.map(r => `${r.model}${r.seconds !== undefined ? ` (${r.seconds.toFixed(1)} seconds)` : ""}:\n${r.text?.trim() || "No usable result"}`).join("\n\n");
+      this.update({ phase: "sending", comparison: text, detail: "Sending the comparison to your private WhatsApp…" });
+      await this.deps.send(owner, `Mic comparison · Same recording\n\n${text}\n\nCompare with what you actually said. Neither result is automatically correct. Nothing was acted on.`, `INKMICCMP${randomUUID().replaceAll("-", "")}`);
+      this.update({ phase: "sent", detail: "Comparison sent. Check which words each recognizer got right or wrong." });
+    } catch {
+      this.update({ phase: comparison.cancelled ? "cancelled" : "error", detail: comparison.cancelled ? "Comparison cancelled. A send already started may still arrive."
+        : this.state.phase === "sending" ? "Comparison delivery wasn't confirmed. Check your chat before retrying."
+        : "Comparison failed. The ordinary speech service is unchanged. Try a new recording." });
+      log.warn("microphone comparison incomplete");
+    } finally {
+      if (comparison.cancelled) this.update({ phase: "cancelled", comparison: undefined, detail: "Comparison cancelled. A send already started may still arrive; no retry will be made." });
+      audio.fill(0); this.comparing = undefined; this.expires = Date.now() + 60_000;
+    }
   }
 
   private begin(owner: string): void {
@@ -195,13 +252,13 @@ export class Microphone {
       if (!recording || recording.owner !== owner || recording.id !== url.searchParams.get("id") || Date.now() >= recording.until) return reply(410, { error: "Recording expired or unavailable. Make a new short test." });
       return reply(200, recording.audio, "audio/wav");
     }
-    if (req.method !== "POST" || !["/listen", "/done", "/cancel"].includes(pathname)) return reply(404, { error: "Not found" });
+    if (req.method !== "POST" || !["/listen", "/done", "/cancel", "/compare"].includes(pathname)) return reply(404, { error: "Not found" });
     // Bearer auth prevents cross-site forms; origin checks also reject accidental cross-site scripts.
     if (req.headers.origin && req.headers.origin !== new URL(config.micControlUrl!).origin) return reply(403, { error: "Wrong origin" });
     try { return reply(200, { message: this.control(owner, pathname.slice(1)) }); }
     catch (error) { return reply(409, { error: error instanceof Error ? error.message : "Control unavailable" }); }
   };
-  close(): void { this.clearRecording(); if (this.job) { this.job.cancelled = true; if (!this.job.closing) this.stop(this.job, "cancel"); } this.sessions.clear(); }
+  close(): void { this.comparing?.abort.abort(); if (this.comparing) this.comparing.cancelled = true; this.clearRecording(); if (this.job) { this.job.cancelled = true; if (!this.job.closing) this.stop(this.job, "cancel"); } this.sessions.clear(); }
 }
 
 let microphone: Microphone | undefined;
@@ -211,7 +268,7 @@ export function startMicrophone(deps: MicDependencies): void {
   try {
     const address = new URL(config.micControlUrl!);
     if (!/^https?:$/.test(address.protocol) || address.username || address.password || address.pathname !== "/") throw new Error("invalid microphone control address");
-    microphone = new Microphone(deps);
+    microphone = new Microphone({ ...deps, compare: deps.compare ?? (config.micCompareCommand ? compareMicrophone : undefined) });
     const controller = microphone;
     const server = http.createServer((req, res) => {
       void controller.handle(req, res).catch(() => { if (!res.headersSent) res.writeHead(500); res.end(); log.warn("microphone control failed"); });

@@ -1,5 +1,14 @@
 # Local voice notes
 
+For controlled microphone diagnosis, `compare-whisper.py` reads one 0.3-20-second, 16 kHz mono PCM WAV from stdin
+and runs two or three explicitly configured local Whisper models on that exact recording. It uses independent CLI
+processes with two CPU threads and lower scheduling priority; it never reloads the live server. Supply `--cli`,
+repeat `--model Label=/absolute/model/path`, and choose `--language en`, `auto` or `hi`. An optional neutral `--prompt`
+is identical for all candidates and must not contain the expected test sentence. All working files are removed from
+protected RAM-backed temporary storage afterward. Results go only to stdout for the operator; do not redirect real
+transcripts into logs or a repository. Compare outputs against what was actually said; a fluent output is not a
+quality score. Run English and natural Hindi/English trials before replacing the operational model.
+
 The Pi checks sender access, downloads bounded audio and sends it through an SSH tunnel to `server.py` on a laptop.
 The gateway decodes with FFmpeg and calls an **existing** whisper.cpp HTTP service. It does not run another model
 server. The transcript enters the normal assistant turn, with the same identity, private history, tools and

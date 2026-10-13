@@ -265,3 +265,33 @@ The manual control page was reachable over the home network and returned HTTP 40
 requests. Use a reachable home-network address in `INKLING_MIC_CONTROL_URL`; `.local` name resolution varies by
 client. A numeric address requires a DHCP reservation or updating the configuration when the Pi's LAN address
 changes. Do not assume that an SSH hostname resolving on one computer proves phone-browser reachability.
+
+## Same-audio recognizer comparison
+
+The owner's playback checks found intelligible recorded speech but errors in ordinary clauses and proper nouns.
+Treat this as evidence to investigate ASR, not proof that capture is perfect in every environment. Do not hide
+meaning-changing errors behind an LLM cleanup pass.
+
+A remotely timed twenty-second trial returned a fragment from the current model and an unrelated sentence from
+Whisper small. The owner reported following the speaking cue, but the diagnostic did not retain playback for
+checking that the full intended utterance was inside the capture window. Neither timing failure nor recognizer
+failure was isolated. This trial is invalid for ranking accuracy. On two lower-priority CPU threads, the fresh CLI
+calls took 1.869 and 18.349 seconds respectively; these are one-trial diagnostic runtimes, not production latency
+estimates or proof that the larger model is better.
+
+The optional **Compare recognizers** button fixes that test procedure: manually capture, verify the complete audio
+with Listen back, then compare the exact same PCM before its one-minute replay window expires. Results appear on
+the page and in the owner's private WhatsApp. The owner compares them with intended words. No expected sentence is
+sent to either decoder. Compare English and natural Hindi/English separately before selecting a replacement.
+
+`INKLING_MIC_COMPARE_COMMAND` is an optional JSON argv array supplied by the trusted operator. The worker reads WAV
+on stdin and returns bounded JSON with two or three labelled transcripts and elapsed times. There is no local
+shell, no tool for the model to invoke, and no user-supplied executable/model/path. One comparison runs at a time;
+at most four start per ten minutes. Cancellation suppresses a result not already being sent. A timed-out SSH
+connection may leave its remote CLI finishing until the worker's own per-model timeout; no automatic retry occurs.
+Working copies are transient, not a recording archive. The original replay copy still expires after one minute.
+
+`speech/compare-whisper.py` is the supplied offline worker. It uses independent low-priority CLI processes rather
+than the shared server's `/load` route. The shared operational model remains unchanged. Fixtures verified exact
+input reuse, private temporary cleanup, output validation, Unicode handling, owner reauthorization, cancellation
+and suppression of duplicate/unauthorized sends. These do not establish real recognition accuracy.

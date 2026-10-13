@@ -20,13 +20,14 @@ button:first-child{background:#174b3c;color:white}button:disabled{opacity:.4;cur
 <div><button id="listen" disabled>Listen</button><button id="done" disabled>Done</button><button id="cancel" disabled>Cancel</button></div>
 <p id="transcript"></p>
 <button id="replay" disabled>Listen back</button>
+<button id="compare" disabled>Compare recognizers</button>
 <audio id="audio" controls preload="none" hidden></audio>
 <p id="replayNotice"></p>
 <small>First step: transcription only. Nothing you say will run a command or approve anything. Tap Done within 20 seconds. Listen back to compare the actual captured audio with the transcript. Only this latest recording is held in memory for one minute, then removed; nothing is archived. This link expires in 30 minutes.</small>
 </main>
 <script>
 const token=location.hash.slice(1);history.replaceState(null,'',location.pathname);
-const elements=Object.fromEntries(['phase','detail','level','seconds','signal','listen','done','cancel','transcript','replay','audio','replayNotice'].map(id=>[id,document.getElementById(id)]));
+const elements=Object.fromEntries(['phase','detail','level','seconds','signal','listen','done','cancel','transcript','replay','compare','audio','replayNotice'].map(id=>[id,document.getElementById(id)]));
 let stopped=false,requesting=false;
 let recordingId,recordingUntil=0,blobUrl,replayTimer;
 function clearReplay(){clearTimeout(replayTimer);elements.audio.pause();elements.audio.removeAttribute('src');elements.audio.load();elements.audio.hidden=true;if(blobUrl)URL.revokeObjectURL(blobUrl);blobUrl=undefined;elements.replay.disabled=true;}
@@ -36,22 +37,23 @@ async function call(path,method='GET'){
  if(response.status===403){stopped=true;throw new Error(data.error);}
  if(!response.ok)throw new Error(data.error||'Connection unavailable');return data;
 }
-function disable(){for(const id of ['listen','done','cancel','replay'])elements[id].disabled=true;}
+function disable(){for(const id of ['listen','done','cancel','replay','compare'])elements[id].disabled=true;}
 async function poll(){
  if(stopped)return;
  try{
   const s=await call('/status');
   elements.phase.textContent=s.phase[0].toUpperCase()+s.phase.slice(1);elements.detail.textContent=s.detail;
   elements.level.value=s.level;elements.seconds.textContent=s.seconds.toFixed(1);elements.signal.textContent=s.signal;
-  elements.transcript.textContent=s.transcript?'Heard: '+s.transcript:'';
+  elements.transcript.textContent=(s.transcript?'Heard: '+s.transcript:'')+(s.comparison?'\n\nSame-audio comparison:\n'+s.comparison:'');
   if(recordingId!==s.id||!s.recordingExpiresAt){clearReplay();elements.replayNotice.textContent='';}
   recordingId=s.id;recordingUntil=s.recordingExpiresAt||0;elements.replay.disabled=!recordingUntil||requesting;
-  const capturing=['starting','listening'].includes(s.phase),busy=capturing||['transcribing','sending'].includes(s.phase);
+  const capturing=['starting','listening'].includes(s.phase),busy=capturing||['transcribing','comparing','sending'].includes(s.phase);
   elements.listen.disabled=busy||requesting;elements.done.disabled=!capturing||requesting;elements.cancel.disabled=!busy||requesting;
+  elements.compare.disabled=!s.canCompare||requesting;
  }catch(error){disable();clearReplay();elements.phase.textContent='Unavailable';elements.detail.textContent=error.message;elements.level.value=0;elements.transcript.textContent='';}
  if(!stopped)setTimeout(poll,500);
 }
-for(const action of ['listen','done','cancel'])elements[action].onclick=async()=>{
+for(const action of ['listen','done','cancel','compare'])elements[action].onclick=async()=>{
  requesting=true;disable();
  try{const result=await call('/'+action,'POST');elements.detail.textContent=result.message;}
  catch(error){elements.detail.textContent=error.message;}

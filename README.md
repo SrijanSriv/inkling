@@ -14,6 +14,8 @@ Listen/Done page. It records the Pi microphone only while requested, shows input
 Whisper transcript to the owner's WhatsApp without acting on it. **Listen back** plays the original captured clip;
 only the latest clip is held in memory for one minute, with no recording archive. This first stage has no wake-word detector or
 automatic assistant answer. See [the microphone design and acceptance plan](docs/microphone-v1.md).
+An optional **Compare recognizers** button runs a configured offline diagnostic worker on that same confirmed clip;
+it does not change the speech server's active model or act on either candidate transcript.
 
 A personal assistant that lives in WhatsApp, for you and a few friends. You text it the way you'd text a friend, on
 your own or in a group chat, and it texts back. Each person gets their own private conversation, memory and
