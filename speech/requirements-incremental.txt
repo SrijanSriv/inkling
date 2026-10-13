@@ -1,0 +1,5 @@
+# Optional local streaming backend. System CUDA 12/cuBLAS plus cuDNN 9 are required.
+faster-whisper==1.2.1
+ctranslate2==4.7.2
+imageio-ffmpeg==0.6.0
+# Install cuDNN separately when it is not already available; see README.

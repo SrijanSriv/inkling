@@ -8,7 +8,7 @@
 body{font:18px/1.5 system-ui,sans-serif;max-width:34rem;margin:2rem auto;padding:0 1rem 260px;padding-bottom:calc(28dvh + 80px);background:#f3efe7;color:#172d27}
 h2{font-size:1rem;margin:18px 0 8px}.reply-placeholder{color:#54685f}main{background:white;border-radius:20px;padding:24px}h1{font-size:1.6rem;margin:0 0 8px}#phase{font-weight:700;font-size:1.3rem}
 progress{width:100%;height:20px}button{font:inherit;border-radius:12px;border:1px solid #b8cbc4;padding:12px 20px;margin:6px 6px 6px 0;cursor:pointer}
-.talk-wrap{position:fixed;z-index:10000;left:50%;top:80vh;top:80dvh;transform:translate(-50%,-50%);display:flex;align-items:center;flex-direction:column;gap:12px;pointer-events:none}#talk{pointer-events:auto;width:140px;height:140px;border-radius:50%;border:0;background:#174b3c;color:white;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:10px;margin:0;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;box-shadow:0 0 0 8px #f3efe7,0 12px 32px #172d2738;transition:background .15s,box-shadow .15s}#talk.held{background:#226b52;box-shadow:0 0 0 12px #c8e4d5,0 12px 32px #172d2738}#talk:focus-visible{outline:3px solid #2367b0;outline-offset:14px}#talk svg{width:38px;height:38px;pointer-events:none}#talkLabel{pointer-events:none;font-weight:650}.hold-help{text-align:center;color:#54685f;font-size:.95rem}button:disabled{opacity:.4;cursor:default}#transcript,#latestReply{white-space:pre-wrap}fieldset{border:1px solid #b8cbc4;border-radius:12px;margin:16px 0}fieldset label{display:block;padding:6px 0}#latestReply{background:#edf5ef;padding:16px;border-radius:12px}#replyTime{font-size:.9rem;color:#54685f}small{color:#54685f}
+.talk-wrap{position:fixed;z-index:10000;left:50%;top:80vh;top:80dvh;transform:translate(-50%,-50%);display:flex;align-items:center;flex-direction:column;gap:12px;pointer-events:none}#talk{pointer-events:auto;width:140px;height:140px;border-radius:50%;border:0;background:#174b3c;color:white;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:10px;margin:0;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;box-shadow:0 0 0 8px #f3efe7,0 12px 32px #172d2738;transition:background .15s,box-shadow .15s}#talk.held{background:#226b52;box-shadow:0 0 0 12px #c8e4d5,0 12px 32px #172d2738}#talk:focus-visible{outline:3px solid #2367b0;outline-offset:14px}#talk svg{width:38px;height:38px;pointer-events:none}#talkLabel{pointer-events:none;font-weight:650}.hold-help{text-align:center;color:#54685f;font-size:.95rem}button:disabled{opacity:.4;cursor:default}#transcript,#latestReply,#partial{white-space:pre-wrap}#partial{color:#54685f;font-size:.95rem;border-left:3px solid #b8cbc4;padding-left:12px}#partial:empty{display:none}#liveChoice{font-size:.95rem}fieldset{border:1px solid #b8cbc4;border-radius:12px;margin:16px 0}fieldset label{display:block;padding:6px 0}#latestReply{background:#edf5ef;padding:16px;border-radius:12px}#replyTime{font-size:.9rem;color:#54685f}small{color:#54685f}
 .shortcut-hint{font-size:.8rem;color:#172d27;background:#f3efe7ed;border-radius:20px;padding:4px 12px;white-space:nowrap}@media(max-width:600px){body{margin:1rem auto}main{padding:20px}#talk{width:124px;height:124px}#talk svg{width:32px;height:32px}}@media(max-height:520px){.talk-wrap{top:auto;bottom:max(16px,env(safe-area-inset-bottom));transform:translateX(-50%)}#talk{width:92px;height:92px}#talk svg{width:25px;height:25px}#talkLabel{font-size:.8rem}.talk-wrap{gap:6px}}
 </style>
 <main>
@@ -21,6 +21,8 @@ progress{width:100%;height:20px}button{font:inherit;border-radius:12px;border:1p
 <p id="permissionNotice">The Pi microphone is selected. Your device microphone stays off.</p>
 <div id="phase" role="status" aria-live="polite">Connecting…</div>
 <p id="detail"></p>
+<label id="liveChoice" hidden><input id="live" type="checkbox"> Live transcript (experimental)</label>
+<p id="partial" aria-label="Draft transcript"></p>
 <progress id="level" max="1" value="0" aria-label="Microphone input level"></progress>
 <p><span id="seconds">0.0</span> seconds · <span id="signal">not checked</span></p>
 
@@ -59,6 +61,7 @@ async function call(path,method='GET'){
 }
 function drawControls(s=lastStatus){
  const capturing=s&&['starting','listening'].includes(s.phase),busy=s?.busy||capturing||s&&['transcribing','comparing','sending'].includes(s.phase);
+ document.getElementById('live').disabled=!!hold||!!busy||requesting||stopped;
  micChoices.disabled=!!hold||!!busy||requesting||stopped;
  elements.talk.disabled=stopped||(selectedMic()==='device'&&!deviceReady)||(hold?hold.released:!!busy||requesting);
  elements.cancel.disabled=stopped||(hold?hold.released:!busy||requesting);
@@ -80,6 +83,7 @@ async function finishHold(session){
    if(session.device&&!session.cancel){
     const wav=await session.capture.finish();
     if(session.cancel)throw new Error('Recording cancelled.');
+    await drainDevice(session);
     const response=await fetch(endpoint('/input?id='+encodeURIComponent(session.id)),{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'audio/wav'},body:wav,signal:AbortSignal.timeout(10000)});
     const body=await response.json();if(!response.ok)throw new Error(body.error||'Recording upload failed.');
    }
@@ -93,12 +97,34 @@ function releaseHold(cancel=false){
  if(session.pointer!==undefined&&elements.talk.hasPointerCapture?.(session.pointer))elements.talk.releasePointerCapture(session.pointer);
  drawControls();void finishHold(session);
 }
+function deviceChunk(session,pcm){
+ if(session.deviceStreamFailed||session.cancel)return;
+ if(session.deviceQueued+pcm.byteLength>32000){session.deviceStreamFailed=true;session.devicePending=[];return;}
+ session.devicePending.push(pcm);session.deviceQueued+=pcm.byteLength;
+ if(session.deviceQueued>=16000)void drainDevice(session);
+}
+function drainDevice(session){
+ if(session.deviceDrain)return session.deviceDrain;
+ session.deviceDrain=(async()=>{
+  while((session.deviceQueued>=16000||session.released&&session.deviceQueued>0)&&!session.cancel&&!session.deviceStreamFailed){
+   const size=Math.min(16000,session.deviceQueued),chunk=new Uint8Array(size);let offset=0;
+   while(offset<size){const part=session.devicePending.shift(),take=Math.min(part.byteLength,size-offset);chunk.set(new Uint8Array(part,0,take),offset);offset+=take;if(take<part.byteLength)session.devicePending.unshift(part.slice(take));}
+   session.deviceQueued-=size;
+   const response=await fetch(endpoint('/chunk?id='+encodeURIComponent(session.id)),{method:'POST',
+    headers:{Authorization:'Bearer '+token,'Content-Type':'application/octet-stream','X-Inkling-Offset':String(session.deviceOffset)},
+    body:chunk,signal:AbortSignal.timeout(5000)});
+   if(!response.ok)throw new Error('Live audio unavailable');session.deviceOffset+=size;
+  }
+ })().catch(()=>{session.deviceStreamFailed=true;session.devicePending=[];session.deviceQueued=0;}).finally(()=>{session.deviceDrain=undefined;});
+ return session.deviceDrain;
+}
 async function startHold(pointer,key){
  if(stopped||requesting||hold||elements.talk.disabled)return;
- const session={pointer,key,device:selectedMic()==='device',released:false,cancel:false,settled:false,finishing:false};hold=session;requesting=true;clearReplay();drawControls();
+ const session={pointer,key,device:selectedMic()==='device',incremental:document.getElementById('live').checked,devicePending:[],deviceQueued:0,deviceOffset:0,released:false,cancel:false,settled:false,finishing:false};hold=session;requesting=true;clearReplay();drawControls();
  if(pointer!==undefined)try{elements.talk.setPointerCapture(pointer);}catch{releaseHold(true);}
  try{
-  const result=await call('/hold'+(session.device?'?source=device':''),'POST');if(!result.id)throw new Error('Recording could not be confirmed. It will cancel automatically.');session.id=result.id;
+  const params=new URLSearchParams();if(session.device)params.set('source','device');if(session.incremental)params.set('incremental','true');
+  const result=await call('/hold'+(params.size?'?'+params:''),'POST');if(!result.id)throw new Error('Recording could not be confirmed. It will cancel automatically.');session.id=result.id;
   if(!session.released)session.timer=setInterval(async()=>{
    if(session.renewing||session.released)return;session.renewing=true;
    try{await call('/held?id='+encodeURIComponent(session.id),'POST');}
@@ -106,7 +132,7 @@ async function startHold(pointer,key){
    finally{session.renewing=false;}
   },750);
   if(session.device&&!session.released){
-   session.capture=new DeviceMicrophone(value=>{if(hold===session&&!session.released)localStatus={...value,phase:'listening',detail:'Listening on this device. Release the circle to send.'};},()=>{elements.detail.textContent='The 20-second limit was reached. Nothing sent. Try a shorter recording.';releaseHold(true);});
+   session.capture=new DeviceMicrophone(value=>{if(hold===session&&!session.released)localStatus={...value,phase:'listening',detail:'Listening on this device. Release the circle to send.'};},()=>{elements.detail.textContent='The 20-second limit was reached. Nothing sent. Try a shorter recording.';releaseHold(true);},session.incremental?pcm=>{if(!session.cancel)deviceChunk(session,pcm);}:undefined);
    await session.capture.start();
    if(session.released)session.capture.cancel();
    else localStatus={phase:'listening',seconds:0,level:0,signal:'waiting for signal',detail:'Listening on this device. Release the circle to send.'};
@@ -154,6 +180,8 @@ async function poll(){
  if(stopped)return;
  try{
   const remote=await call('/status');const s=hold?.device&&!hold.released&&localStatus?{...remote,...localStatus}:remote;lastStatus=s;
+  document.getElementById('liveChoice').hidden=!remote.incrementalAvailable;if(!remote.incrementalAvailable)document.getElementById('live').checked=false;
+  document.getElementById('partial').textContent=remote.partial&&!remote.transcript?'Draft hearing: '+remote.partial:'';
   const reply=remote.latestReply;document.getElementById('replyPlaceholder').hidden=!!reply;document.getElementById('latestReply').hidden=!reply;document.getElementById('latestReply').textContent=reply?.text||'';
   if(reply&&reply.id!==shownReplyId){shownReplyId=reply.id;shownElapsed=submission?.id===reply.id?performance.now()-submission.start:undefined;}
   document.getElementById('replyTime').textContent=reply?`${((shownElapsed??reply.elapsedMs)/1000).toFixed(1)} seconds ${shownElapsed!==undefined?'from release to the reply appearing here':'from submitting audio to the reply being ready'}${reply.delivered?' · sent to WhatsApp':' · WhatsApp delivery not confirmed'}`:'';

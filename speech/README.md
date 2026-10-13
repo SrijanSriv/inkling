@@ -134,3 +134,38 @@ Owner-private room-mic conversations can optionally use `INKLING_MIC_COMPACT=tru
 prompt and one tool-free model response, while tasks load the same permitted tools. All personal notes remain
 in context; older conversation remains encrypted and searchable. This does not change WhatsApp voice-note
 transcription or the recognizer. See [mic architecture and measurements](../docs/microphone-v1.md#optional-compact-mic-conversations).
+
+## Optional incremental microphone mode
+
+The laptop gateway can preload a local CTranslate2 multilingual turbo checkpoint when
+`INKLING_WHISPER_INCREMENTAL_MODEL` is set to its directory. Install the optional versions in
+`requirements-incremental.txt` in a separate environment, with compatible CUDA 12/cuBLAS and cuDNN 9 libraries.
+The tested deployment uses cuDNN 9.1.1.17 and the system cuBLAS library; CUDA library paths must be supplied to
+the service environment. Do not replace system GPU drivers for this feature. Keep the original warm whisper.cpp
+mic server available for fallback and install `server.py`, `incremental.py`, `faster_backend.py` and `quality.py`
+together. Point the existing gateway user service at the optional environment, allow up to 3 GB RAM / two CPU
+cores, and check authenticated `/health` reports `incremental: true` before enabling the Pi flag. The model
+is local-only at service start: downloads and credentials do not belong in the assistant or its coding jobs.
+
+Set `INKLING_MIC_INCREMENTAL=true` on the Pi. The private page then offers “Live transcript (experimental),”
+unchecked by default. Audio goes over the existing authenticated connection while held; drafts are visible only
+to the requester and never reach the assistant. Release seals the exact recording and a complete final pass
+runs before normal interpretation. No wake word or automatic endpoint is added. Browser mics request 16 kHz
+Web Audio; if that rate is unavailable, full-recording fallback remains available. Keep the updated
+`ops/mic_proxy.py` installed if serving this page through the optional HTTPS proxy, so `/mic/chunk` is routed.
+
+Raw audio stays bounded in RAM: one active session, at most twenty seconds, a one-second transport buffer,
+ten-second capture inactivity expiry, thirty-second capture lifetime and a separate bounded finish deadline.
+Cancelled/expired native work may finish internally but cannot publish. A native stall beyond 195 seconds
+restarts the supervised gateway; interrupted recordings need a fresh manual request. Completed text is cached for at most
+sixty seconds for idempotent result fetching; no audio or draft text is logged or backed up. Final accepted
+conversation text uses the existing encrypted chat store. Other people's sessions/history are never exposed.
+
+`benchmark-incremental.py` measures explicit public/authorised WAV inputs without an assistant instance or any
+message delivery. Its default output is hashes/timings/schema only; `--stream-replay` replays actual wall time.
+Longer cost-floor probes repeat the input, so those are throughput tests, not accuracy examples. The experimental
+`--audio-context bounded` probe is diagnostic only and must not be used as a production setting.
+
+See [implementation measurements and rollout limits](../docs/incremental-transcription-plan.md#12-implemented-v1-and-measured-decision).
+Rollback: uncheck live mode or disable the Pi flag; remove the optional laptop model variable/service override
+to unload the new backend. The existing full-WAV and WhatsApp voice-note paths need no data migration.

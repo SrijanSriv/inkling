@@ -13,12 +13,15 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+import re
 import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MAX_BYTES = 12 * 1024 * 1024
 MAX_SECONDS = 120
 LOCK = threading.Lock()
+GPU_LOCK = threading.Lock()
+INCREMENTAL = None
 UPSTREAM = os.environ.get('INKLING_WHISPER_UPSTREAM', 'http://127.0.0.1:8081').rstrip('/')
 MODEL = os.environ.get('INKLING_WHISPER_MODEL', '')
 SECRET = os.environ.get('INKLING_WHISPER_SECRET', '')
@@ -109,7 +112,7 @@ def transcript(result):
     words = text.lower().split()
     if len(words) > 24 and len(set(words))/len(words) < 0.18:
         raise Rejected(422)
-    return {'text': text, 'language': result.get('language'), 'engine': 'whisper.cpp'}
+    return {'text': text, 'language': result.get('language'), 'engine': result.get('engine','whisper.cpp')}
 
 
 def microphone_wav(sound):
@@ -129,6 +132,28 @@ def microphone_wav(sound):
             raise Rejected(422)
     except (wave.Error, EOFError):
         raise Rejected(422)
+
+
+def validate_microphone(result, sound):
+    from quality import coverage_warning
+    microphone_wav(sound)
+    answer = transcript(result)
+    coverage = {'transcription': [{'text': s.get('text', ''), 'offsets':
+        {'from': s.get('start', -1)*1000, 'to': s.get('end', -1)*1000}}
+        for s in result.get('segments', [])]}
+    if warning := coverage_warning(coverage, sound, answer['text']):
+        answer['warning'] = warning
+    return answer
+
+
+def pcm_wav(pcm):
+    buffer = io.BytesIO()
+    with wave.open(buffer,'wb') as audio:
+        audio.setnchannels(1)
+        audio.setsampwidth(2)
+        audio.setframerate(16000)
+        audio.writeframes(pcm)
+    return buffer.getvalue()
 
 
 def check_tail(result, wav):
@@ -166,7 +191,64 @@ class Handler(BaseHTTPRequestHandler):
     def authorized(self):
         return bool(SECRET) and hmac.compare_digest(self.headers.get('Authorization', '').encode(), ('Bearer '+SECRET).encode())
 
+    def incremental(self):
+        if not self.path.startswith('/microphone/session'):
+            return False
+        if not self.authorized():
+            self.answer(401, {'error':'unauthorized'})
+            return True
+        if INCREMENTAL is None:
+            self.answer(404, {'error':'unavailable'})
+            return True
+        from incremental import SessionError
+        try:
+            if len(self.headers.get_all('Content-Length',[]))>1:
+                raise SessionError(400,'invalid_request')
+            if self.path == '/microphone/session' and self.command == 'POST':
+                if self.headers.get('Transfer-Encoding') or self.headers.get('Content-Length','0') != '0':
+                    raise SessionError(400,'invalid_request')
+                result = INCREMENTAL.create()
+            else:
+                match = re.fullmatch(r'/microphone/session/([a-f0-9]{32})(?:/(audio|finish))?',self.path)
+                if not match:
+                    raise SessionError(404,'not_found')
+                ident, action = match.groups()
+                if self.command == 'GET' and action is None:
+                    result = INCREMENTAL.status(ident)
+                elif self.command == 'DELETE' and action is None:
+                    result = INCREMENTAL.cancel(ident)
+                elif self.command == 'POST' and action == 'finish':
+                    raw = self.headers.get('X-Inkling-Size','')
+                    if not re.fullmatch(r'[0-9]{1,6}',raw) or self.headers.get('Content-Length','0') != '0' or self.headers.get('Transfer-Encoding'):
+                        raise SessionError(400,'invalid_request')
+                    result = INCREMENTAL.finish(ident,int(raw))
+                elif self.command == 'POST' and action == 'audio':
+                    length, offset = self.headers.get('Content-Length',''), self.headers.get('X-Inkling-Offset','')
+                    if (self.headers.get('Transfer-Encoding') or not re.fullmatch(r'[0-9]{1,5}',length)
+                        or not re.fullmatch(r'[0-9]{1,6}',offset) or not 0<int(length)<=32000
+                        or self.headers.get('Content-Type')!='application/octet-stream'):
+                        raise SessionError(400,'invalid_request')
+                    self.connection.settimeout(5)
+                    audio = self.rfile.read(int(length))
+                    if len(audio)!=int(length):
+                        raise SessionError(400,'incomplete')
+                    result = INCREMENTAL.append(ident,int(offset),audio)
+                else:
+                    raise SessionError(404,'not_found')
+            self.answer(200,result)
+        except SessionError as error:
+            self.answer(error.status,{'error':error.code})
+        except Exception:
+            self.answer(503,{'error':'unavailable'})
+        return True
+
+    def do_DELETE(self):
+        if not self.incremental():
+            self.answer(404,{'error':'not_found'})
+
     def do_GET(self):
+        if self.incremental():
+            return
         if not self.authorized():
             return self.answer(401, {'error': 'unauthorized'})
         if self.path != '/health':
@@ -176,10 +258,12 @@ class Handler(BaseHTTPRequestHandler):
                 ready = response.status == 200 and Path(MODEL).is_file()
         except Exception:
             ready = False
-        return self.answer(200 if ready else 503, {'ready': ready, 'engine': 'whisper.cpp'})
+        return self.answer(200 if ready else 503, {'ready': ready, 'engine': 'whisper.cpp', 'incremental': INCREMENTAL is not None})
 
     def do_POST(self):
         global unavailable_until
+        if self.incremental():
+            return
         if not self.authorized():
             return self.answer(401, {'error': 'unauthorized'})
         mic = self.path == '/microphone' and bool(MIC_UPSTREAM)
@@ -195,25 +279,22 @@ class Handler(BaseHTTPRequestHandler):
             return self.answer(413, {'error': 'size_limit'})
         if time.monotonic() < unavailable_until or not LOCK.acquire(blocking=False):
             return self.answer(429, {'error': 'busy'})
+        gpu_acquired = False
         try:
             self.connection.settimeout(20)
             sound = self.rfile.read(size)
             if len(sound) != size:
                 raise Rejected(422)
             if mic:
-                from quality import coverage_warning
+                gpu_acquired = GPU_LOCK.acquire(blocking=False)
+                if not gpu_acquired:
+                    raise Rejected(429)
                 microphone_wav(sound)
                 started = time.monotonic()
                 result = whisper('/inference', {'language': MIC_LANGUAGE, 'translate': 'false', 'no_context': 'true',
                     'max_context': '0', 'response_format': 'verbose_json', 'temperature': '0',
                     'prompt': os.environ.get('INKLING_WHISPER_HINT', 'English and Hindi conversation.')}, sound, MIC_UPSTREAM)
-                answer = transcript(result)
-                # The server emits seconds; the diagnostic CLI emits millisecond offsets.
-                coverage = {'transcription': [{'text': s.get('text', ''), 'offsets':
-                    {'from': s.get('start', -1)*1000, 'to': s.get('end', -1)*1000}}
-                    for s in result.get('segments', [])]}
-                if warning := coverage_warning(coverage, sound, answer['text']):
-                    answer['warning'] = warning
+                answer = validate_microphone(result, sound)
                 answer['seconds'] = round(time.monotonic()-started, 3)
                 self.answer(200, answer)
                 print('Microphone transcription completed.', flush=True)
@@ -234,6 +315,8 @@ class Handler(BaseHTTPRequestHandler):
             self.answer(503, {'error': 'unavailable'})
             print('Transcription unavailable.', flush=True)
         finally:
+            if gpu_acquired:
+                GPU_LOCK.release()
             LOCK.release()
 
 
@@ -245,6 +328,17 @@ if __name__ == '__main__':
         raise SystemExit('Configure microphone language as auto, en or hi.')
     if not SECRET or not Path(MODEL).is_file() or MODEL.endswith('.en.bin'):
         raise SystemExit('Configure a secret and an existing multilingual model.')
+    if os.environ.get('INKLING_WHISPER_INCREMENTAL_MODEL'):
+        from faster_backend import FasterBackend
+        from incremental import Sessions
+        backend = FasterBackend(os.environ['INKLING_WHISPER_INCREMENTAL_MODEL'])
+        backend.decode(b'\0'*(16000*2*2), MIC_LANGUAGE, 'English and Hindi conversation.')  # Warm kernels on synthetic silence, never room audio.
+
+        def decode_incremental(pcm):
+            with GPU_LOCK:
+                return backend.decode(pcm, MIC_LANGUAGE, os.environ.get('INKLING_WHISPER_HINT','English and Hindi conversation.'))
+
+        INCREMENTAL = Sessions(decode_incremental, lambda result,pcm: validate_microphone(result,pcm_wav(pcm)), fatal=lambda:os._exit(75))
     server = ThreadingHTTPServer(('127.0.0.1', int(os.environ.get('INKLING_WHISPER_PORT', '8102'))), Handler)
     server.daemon_threads = True
     print('Private speech gateway ready.', flush=True)

@@ -4,7 +4,7 @@ import re
 from urllib.parse import urlsplit
 
 GET = {'/', '/microphone-device.js', '/microphone-recorder.js', '/status', '/audio'}
-POST = {'/hold', '/held', '/done', '/cancel', '/compare', '/listen', '/input'}
+POST = {'/hold', '/held', '/done', '/cancel', '/compare', '/listen', '/input', '/chunk'}
 PUBLIC = {'/', '/microphone-device.js', '/microphone-recorder.js'}
 MAX_AUDIO = 640044
 RESPONSE_HEADERS = {'content-type', 'cache-control', 'referrer-policy', 'x-content-type-options',
@@ -41,7 +41,7 @@ def proxy(handler, configuration):
         handler.reply(400)
         return True
     size = int(lengths[0]) if lengths else 0
-    if size > (MAX_AUDIO if path == '/input' else 0):
+    if size > (MAX_AUDIO if path == '/input' else 16000 if path == '/chunk' else 0):
         handler.reply(413)
         return True
     connection = http.client.HTTPConnection('127.0.0.1', port, timeout=10)
@@ -51,7 +51,7 @@ def proxy(handler, configuration):
             handler.reply(400)
             return True
         headers = {'Content-Length': str(size)}
-        for key in ('Authorization', 'Origin', 'Content-Type'):
+        for key in ('Authorization', 'Origin', 'Content-Type', 'X-Inkling-Offset'):
             if key in handler.headers:
                 headers[key] = handler.headers[key]
         connection.request(handler.command, path+('?' + target.query if target.query else ''), body=body, headers=headers)

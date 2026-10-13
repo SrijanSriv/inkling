@@ -76,7 +76,7 @@ class MicProxy(unittest.TestCase):
         self.assertEqual(self.seen[-1], ('POST', '/input?id=fixture', 'https://example.org', b'fixture'))
 
     def test_body_limits_and_default_disabled(self):
-        self.assertEqual(self.request('/mic/input', 'POST', b'x'*640045, self.auth)[0], 413)
+        self.assertEqual(self.request('/mic/input', 'POST', headers={**self.auth,'Content-Length':'640045'})[0], 413)
         self.assertEqual(self.request('/mic/hold', 'POST', b'x', self.auth)[0], 413)
         self.assertEqual(self.seen, [])
         self.c.pop('webhook_mic_port')

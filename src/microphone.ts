@@ -9,14 +9,15 @@ import { transcribe } from "./voice.js";
 import { queueVoice, VoiceInputError, voiceErrorText } from "./voice-intake.js";
 import { log } from "./log.js";
 import { reviewMicrophone } from "./microphone-review.js";
+import { MicrophoneStream } from "./microphone-stream.js";
 import { transcribeMicrophone } from "./microphone-transcription.js";
 
 const RATE = 16000, MAX_BYTES = RATE * 2 * 20;
 const PAGE = readFileSync(new URL("../assets/microphone.html", import.meta.url), "utf8");
 type Phase = "idle" | "starting" | "listening" | "transcribing" | "comparing" | "sending" | "sent" | "cancelled" | "error";
 type Reply = { text: string; elapsedMs: number; at: number; id: string; delivered: boolean };
-type Status = { latestReply?: Reply; busy?: boolean; phase: Phase; detail: string; seconds: number; level: number; signal: string; transcript?: string; id?: string; recordingExpiresAt?: number; canCompare?: boolean; comparison?: string; conversation?: boolean };
-type Job = { id: string; owner: string; recorder?: ChildProcessWithoutNullStreams; device?: boolean; uploading?: boolean; submittedAt?: number; chunks: Buffer[]; bytes: number;
+type Status = { incrementalAvailable?: boolean; partial?: string; latestReply?: Reply; busy?: boolean; phase: Phase; detail: string; seconds: number; level: number; signal: string; transcript?: string; id?: string; recordingExpiresAt?: number; canCompare?: boolean; comparison?: string; conversation?: boolean };
+type Job = { id: string; owner: string; recorder?: ChildProcessWithoutNullStreams; stream?: MicrophoneStream; deviceOffset?: number; device?: boolean; uploading?: boolean; submittedAt?: number; chunks: Buffer[]; bytes: number;
   samples: number; sum: number; energy: number; clipped: number; lastFrame: number; start: number;
   closing: boolean; cancelled: boolean; abort: AbortController; holdUntil?: number; deadline: NodeJS.Timeout; watchdog: NodeJS.Timeout };
 export type MicDependencies = {
@@ -101,13 +102,13 @@ export class Microphone {
   status(owner?: string): Status {
     this.prune();
     const latestReply = owner ? this.replies.get(owner) : undefined;
-    if (owner && this.stateOwner && owner !== this.stateOwner) return { phase: "idle", detail: this.job || this.comparing ? "The shared microphone service is busy. Try again shortly." : "Hold the circle for a new recording.", seconds: 0, level: 0, signal: "not checked", busy: !!this.job || !!this.comparing, latestReply, conversation: config.micConversation };
+    if (owner && this.stateOwner && owner !== this.stateOwner) return { phase: "idle", detail: this.job || this.comparing ? "The shared microphone service is busy. Try again shortly." : "Hold the circle for a new recording.", seconds: 0, level: 0, signal: "not checked", busy: !!this.job || !!this.comparing, latestReply, incrementalAvailable: config.micIncremental, conversation: config.micConversation };
     if (!this.job && !this.comparing && this.expires && Date.now() > this.expires) {
       this.state = { phase: "idle", detail: "Hold the circle for a new recording.", seconds: 0, level: 0, signal: "not checked" };
       this.expires = 0;
     }
     const valid = !!this.recording && Date.now() < this.recording.until;
-    return { ...this.state, latestReply, conversation: config.micConversation, recordingExpiresAt: valid ? this.recording!.until : undefined,
+    return { ...this.state, latestReply, incrementalAvailable: config.micIncremental, conversation: config.micConversation, recordingExpiresAt: valid ? this.recording!.until : undefined,
       canCompare: valid && !!this.deps.compare && !this.job && !this.comparing };
   }
   private update(patch: Partial<Status>): void { this.state = { ...this.state, ...patch }; }
@@ -115,7 +116,7 @@ export class Microphone {
     if (this.recording) { clearTimeout(this.recording.timer); this.recording.audio.fill(0); this.recording = undefined; }
   }
 
-  control(owner: string, action: string, id?: string, device = false): string {
+  control(owner: string, action: string, id?: string, device = false, incremental = false): string {
     if (!getUsers().some(u => u.id === owner)) throw new Error("Microphone controls are available in registered private chats.");
     if (action === "compare") {
       const recording = this.recording;
@@ -140,7 +141,7 @@ export class Microphone {
       const arrivals = (this.arrivals.get(owner) || []).filter(at => Date.now()-at<600_000);
       if (arrivals.length >= 12) throw new Error("Too many microphone requests. Try again in a few minutes.");
       arrivals.push(Date.now()); this.arrivals.set(owner,arrivals);
-      this.begin(owner, action === "hold", device); return "Starting capture. Wait for Listening before speaking.";
+      this.begin(owner, action === "hold", device, incremental); return "Starting capture. Wait for Listening before speaking.";
     }
     const job = this.job;
     if (!job || job.owner !== owner) throw new Error("There is no microphone request in progress.");
@@ -158,6 +159,7 @@ export class Microphone {
     if (action === "cancel") {
       job.cancelled = true;
       job.abort.abort();
+      job.stream?.cancel();
       this.clearRecording();
       if (!job.closing) this.stop(job, "cancel");
       else this.update({ detail: "Cancelled. Waiting for the current service call to finish; no new result will be sent." });
@@ -193,7 +195,7 @@ export class Microphone {
     }
   }
 
-  private begin(owner: string, held = false, device = false): void {
+  private begin(owner: string, held = false, device = false, incremental = false): void {
     this.clearRecording();
     const recorder = device ? undefined : this.deps.record?.() ?? spawn("pw-record", ["--raw", "--target", config.micSource!, "--rate", String(RATE), "--channels", "1", "--format", "s16", "-"], { stdio: "pipe" });
     const job = { id: randomUUID(), owner, recorder, device, chunks: [], bytes: 0, samples: 0, sum: 0, energy: 0, clipped: 0,
@@ -203,6 +205,9 @@ export class Microphone {
     this.stateOwner = owner;
     this.state = { phase: "starting", detail: device ? "Opening your device microphone…" : "Opening the Pi microphone…", seconds: 0, level: 0, signal: "not checked", id: job.id };
     this.expires = 0;
+    if(config.micIncremental&&incremental&&config.micConversation)job.stream=new MicrophoneStream(text=>{
+      if(this.job===job&&!job.cancelled)this.update({partial:text});
+    });
     recorder?.stderr.resume(); // Device diagnostics stay out of chat and content logs.
     let tail: Buffer = Buffer.alloc(0);
     recorder?.stdout.on("data", (data: Buffer) => {
@@ -213,6 +218,7 @@ export class Microphone {
       if (!length) return;
       if (job.bytes + length > MAX_BYTES) return this.stop(job, "limit");
       const pcm = Buffer.from(combined.subarray(0, length));
+      job.stream?.append(pcm);
       job.chunks.push(pcm); job.bytes += pcm.length; job.lastFrame = Date.now();
       let energy = 0;
       for (let i = 0; i < pcm.length; i += 2) {
@@ -242,6 +248,7 @@ export class Microphone {
     const kill = setTimeout(() => job.recorder?.kill("SIGKILL"), 1500); kill.unref();
     job.recorder?.once("close", () => clearTimeout(kill));
     if (reason !== "done") {
+      job.stream?.cancel();
       job.chunks = [];
       this.update({ phase: reason === "cancel" ? "cancelled" : "error", level: 0,
         detail: reason === "cancel" ? "Cancelled. Nothing transcribed or sent." : reason === "limit"
@@ -252,6 +259,7 @@ export class Microphone {
     const rms = Math.sqrt(job.energy / Math.max(1, job.samples));
     const variation = job.energy / Math.max(1, job.samples) - (job.sum / Math.max(1, job.samples)) ** 2;
     if (job.bytes < RATE * 2 * .3 || rms < 25 || variation < 1 || job.clipped / Math.max(1, job.samples) > .01) {
+      job.stream?.cancel();
       job.chunks = [];
       this.update({ phase: "error", level: 0, detail: "The recording was too short, silent, constant or badly clipped. Nothing transcribed. Check the mic and try again." });
       this.job = undefined; this.expires = Date.now() + 60_000; return;
@@ -270,7 +278,7 @@ export class Microphone {
   private async finish(job: Job, audio: Buffer): Promise<void> {
     const doneAt = job.submittedAt ?? Date.now();
     try {
-      const reviewed = await queueVoice(`microphone-${job.owner}`, async () => {
+      const baseline = () => queueVoice(`microphone-${job.owner}`, async () => {
         if (config.micConversation) return (this.deps.decode ?? transcribeMicrophone)(audio, job.abort.signal);
         if (config.micReviewModel) {
           if (!config.micReviewReference || !this.deps.compare) throw new VoiceInputError("unavailable");
@@ -279,6 +287,13 @@ export class Microphone {
         }
         return { text: await (this.deps.transcribe?.(audio) ?? transcribe(audio, "audio/wav")), clarification: undefined };
       });
+      // Incremental GPU sessions have their own bounded worker; unrelated CPU voice notes must not delay sealing.
+      const reviewed = job.stream ? await job.stream.finish(audio.subarray(44),job.abort.signal).catch(async()=>{
+        if(job.cancelled||job.abort.signal.aborted||!await job.stream!.abandon(job.abort.signal))throw new VoiceInputError("unavailable");
+        this.update({partial:undefined,detail:"Live transcription was interrupted. Finishing with the full recording…"});
+        log.info("microphone incremental fallback");
+        return baseline();
+      }) : await baseline();
       if (job.cancelled) return;
       if (!getUsers().some(u => u.id === job.owner ) || !this.deps.available()) throw new VoiceInputError("unavailable");
       const text = reviewed.text;
@@ -302,6 +317,7 @@ export class Microphone {
         : error instanceof VoiceInputError ? voiceErrorText(error.kind) : "Transcription failed. Nothing was acted on. Please retry." });
       log.warn("microphone request failed");
     } finally {
+      job.stream?.cancel();
       audio.fill(0);
       if (job.cancelled) this.update({ phase: "cancelled", transcript: undefined, detail: "Cancelled. A send already in progress may still arrive; no retry will be made." });
       // Service latency must not consume the entire manual comparison window. Never extend the hard cap.
@@ -314,6 +330,13 @@ export class Microphone {
       }
       this.job = undefined; this.expires = Date.now() + 60_000;
     }
+  }
+
+  deviceChunk(user: string, id: string, offset: number, pcm: Buffer): void {
+    const job=this.job;
+    if(!job||job.owner!==user||job.id!==id||!job.device||job.closing||job.cancelled||!job.stream
+      ||offset!==(job.deviceOffset||0)||!pcm.length||pcm.length%2||pcm.length>16000||offset+pcm.length>MAX_BYTES)throw new Error("Recording unavailable");
+    job.deviceOffset=offset+pcm.length;job.stream.append(pcm);
   }
 
   async upload(owner: string, id: string, audio: Buffer): Promise<void> {
@@ -355,30 +378,30 @@ export class Microphone {
       if (!recording || recording.owner !== owner || recording.id !== url.searchParams.get("id") || Date.now() >= recording.until) return reply(410, { error: "Recording expired or unavailable. Make a new short test." });
       return reply(200, recording.audio, "audio/wav");
     }
-    if (req.method === "POST" && pathname === "/input") {
+    if (req.method === "POST" && ["/input","/chunk"].includes(pathname)) {
       if (req.headers.origin && req.headers.origin !== new URL(config.micControlUrl!).origin) return reply(403,{error:"Wrong origin"});
       const job=this.job, id=url.searchParams.get("id");
-      if (!job || job.owner!==owner || job.id!==id || !job.device || !job.uploading || job.closing) return reply(409,{error:"Recording unavailable"});
+      if (!job || job.owner!==owner || job.id!==id || !job.device || (pathname==="/input"&&!job.uploading) || job.closing) return reply(409,{error:"Recording unavailable"});
       const size=Number(req.headers["content-length"]);
-      if (req.headers["transfer-encoding"] || !Number.isInteger(size) || size<44 || size>MAX_BYTES+44
-        || req.headers["content-type"]!=="audio/wav") return reply(413,{error:"Invalid recording size or format"});
+      if (req.headers["transfer-encoding"] || !Number.isInteger(size) || size<(pathname==="/input"?44:2) || size>(pathname==="/input"?MAX_BYTES+44:16000)
+        || req.headers["content-type"]!==(pathname==="/input"?"audio/wav":"application/octet-stream")) return reply(413,{error:"Invalid recording size or format"});
       const chunks:Buffer[]=[]; let bytes=0;
       try {
         for await (const chunk of req) { bytes+=chunk.length; if (bytes>size) throw new Error("Recording too large"); chunks.push(chunk); }
         if (bytes!==size) throw new Error("Incomplete recording");
         const audio=Buffer.concat(chunks);
-        try { await this.upload(owner,id!,audio); } finally { audio.fill(0); }
+        try { if(pathname==="/chunk")this.deviceChunk(owner,id!,Number(req.headers["x-inkling-offset"]),audio);else await this.upload(owner,id!,audio); } finally { audio.fill(0); }
         return reply(200,{message:"Recording submitted."});
       } catch { if (this.job===job && !job.closing) this.stop(job,"cancel"); return reply(409,{error:"Recording was interrupted or invalid. Try again."}); }
     }
     if (req.method !== "POST" || !["/listen", "/hold", "/held", "/done", "/cancel", "/compare"].includes(pathname)) return reply(404, { error: "Not found" });
     // Bearer auth prevents cross-site forms; origin checks also reject accidental cross-site scripts.
     if (req.headers.origin && req.headers.origin !== new URL(config.micControlUrl!).origin) return reply(403, { error: "Wrong origin" });
-    try { return reply(200, { message: this.control(owner, pathname.slice(1), url.searchParams.get("id") || undefined, url.searchParams.get("source")==="device"),
+    try { return reply(200, { message: this.control(owner, pathname.slice(1), url.searchParams.get("id") || undefined, url.searchParams.get("source")==="device", url.searchParams.get("incremental")==="true"),
       ...(pathname === "/hold" ? { id: this.job?.id } : {}) }); }
     catch (error) { return reply(409, { error: error instanceof Error ? error.message : "Control unavailable" }); }
   };
-  close(): void { this.comparing?.abort.abort(); if (this.comparing) this.comparing.cancelled = true; this.clearRecording(); if (this.job) { this.job.cancelled = true; this.job.abort.abort(); if (!this.job.closing) this.stop(this.job, "cancel"); } this.sessions.clear(); this.replies.clear(); this.awaiting.clear(); }
+  close(): void { this.comparing?.abort.abort(); if (this.comparing) this.comparing.cancelled = true; this.clearRecording(); if (this.job) { this.job.cancelled = true; this.job.abort.abort(); this.job.stream?.cancel(); if (!this.job.closing) this.stop(this.job, "cancel"); } this.sessions.clear(); this.replies.clear(); this.awaiting.clear(); }
 }
 
 let microphone: Microphone | undefined;

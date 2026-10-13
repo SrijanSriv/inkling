@@ -492,3 +492,11 @@ release submits. Repeats do not start another capture. Modifier chords, page los
 both physical modifier keys does not submit until both are released. Space/Enter on the focused circle remain.
 Mocked DOM checks cover both platforms, chord/repeat/focus behaviour and page structure without real recording
 or message delivery.
+
+### Opt-in live transcription
+
+With `INKLING_MIC_INCREMENTAL=true` and the optional laptop backend configured, the private mic page offers
+“Live transcript (experimental).” It is unchecked by default. While held, it shows provisional words; release
+uses a complete final decode, with existing coverage warnings, private context and spoken-approval restrictions.
+The current recognizer stays available as fallback. This is available for registered private chats, for both
+the Pi mic and supported phone/laptop mics. See [the implementation plan and measured outcome](incremental-transcription-plan.md#12-implemented-v1-and-measured-decision).
