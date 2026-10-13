@@ -280,7 +280,7 @@ calls took 1.869 and 18.349 seconds respectively; these are one-trial diagnostic
 estimates or proof that the larger model is better.
 
 The optional **Compare recognizers** button fixes that test procedure: manually capture, verify the complete audio
-with Listen back, then compare the exact same PCM before its one-minute replay window expires. Results appear on
+with Listen back, then compare the exact same PCM before its replay window expires. Results appear on
 the page and in the owner's private WhatsApp. The owner compares them with intended words. No expected sentence is
 sent to either decoder. Compare English and natural Hindi/English separately before selecting a replacement.
 
@@ -289,7 +289,7 @@ on stdin and returns bounded JSON with two or three labelled transcripts and ela
 shell, no tool for the model to invoke, and no user-supplied executable/model/path. One comparison runs at a time;
 at most four start per ten minutes. Cancellation suppresses a result not already being sent. A timed-out SSH
 connection may leave its remote CLI finishing until the worker's own per-model timeout; no automatic retry occurs.
-Working copies are transient, not a recording archive. The original replay copy still expires after one minute.
+Working copies are transient, not a recording archive. The replay copy expires one minute after transcription finishes, capped at three minutes after Done. This prevents a slow transcription from consuming the comparison window.
 
 `speech/compare-whisper.py` is the supplied offline worker. It uses independent low-priority CLI processes rather
 than the shared server's `/load` route. The shared operational model remains unchanged. Fixtures verified exact
@@ -303,3 +303,21 @@ Both candidates had been forced to `en`; that was the tested setting for Swift, 
 confound for a general multilingual model. The diagnostic now supports explicit per-model language settings. Keep
 Swift at its established setting and evaluate general Whisper with automatic language detection on the same clip.
 Do not infer that a larger model is universally better, or that English output preserved the complete request.
+
+The next owner-controlled comparison used automatic language detection for small. It took 15.5 seconds versus
+2.1 seconds for Swift and returned Urdu-script text with remaining word errors. This does not establish that small
+is a useful replacement. Keep the production recognizer unchanged while evaluating another candidate.
+
+An isolated CPU smoke test of `large-v3-turbo-q5_0` took 43.66 seconds on the public Whisper JFK sample, with two
+threads and beam size five. It reproduced that sample's phrase, but this is neither a test of the owner's accent
+nor acceptable conversational latency. GPU acceleration must be verified separately before another live test.
+Build GPU binaries in a separate directory and verify actual CUDA offload, memory use and elapsed time. Do not
+replace the shared speech server or select a model merely because the GPU is detected. Human English/Hinglish
+comparisons must still check negation, reminder intent and named entities on the identical recording.
+
+The isolated CUDA build subsequently processed that same public sample in 4.892 seconds and logged the model on
+the CUDA backend, versus 43.66 seconds for CPU. Peak child host RSS was 424.4 MiB; this is not GPU memory usage.
+This supports a human comparison, not a production-model switch. The deployed diagnostic compares Swift (`en`)
+with turbo (`auto`) and turbo (`hi`) on the same recording, using the separate CUDA CLI for all three. These new
+timings must not be attributed solely to the model when comparing with earlier CPU trials. Hindi decoding may
+produce Devanagari; do not rewrite output into Romanized Hindi or English to conceal recognition mistakes.

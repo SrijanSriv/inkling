@@ -94,7 +94,7 @@ export class Microphone {
     if (!getUsers().some(u => u.id === owner && u.owner)) throw new Error("Microphone controls are owner-private.");
     if (action === "compare") {
       const recording = this.recording;
-      if (!this.deps.compare || !recording || recording.owner !== owner || Date.now() >= recording.until) throw new Error("Make a new recording, then compare within one minute of Done.");
+      if (!this.deps.compare || !recording || recording.owner !== owner || Date.now() >= recording.until) throw new Error("Make a new recording, then compare within one minute of the transcript arriving (three minutes maximum after Done).");
       if (this.job || this.comparing) throw new Error("Wait for the current microphone request to finish.");
       this.comparisonArrivals = this.comparisonArrivals.filter(at => Date.now() - at < 600_000);
       if (this.comparisonArrivals.length >= 4) throw new Error("Comparison limit reached. Try again in a few minutes.");
@@ -209,8 +209,8 @@ export class Microphone {
     }
     const audio = microphoneWav(Buffer.concat(job.chunks)); job.chunks = [];
     // Independent copy: expiry must not zero a request still being decoded by the speech gateway.
-    this.recording = { owner: job.owner, id: job.id, audio: Buffer.from(audio), until: Date.now() + 60_000,
-      timer: setTimeout(() => this.clearRecording(), 60_000) };
+    this.recording = { owner: job.owner, id: job.id, audio: Buffer.from(audio), until: Date.now() + 180_000,
+      timer: setTimeout(() => this.clearRecording(), 180_000) };
     this.recording.timer.unref();
     this.update({ phase: "transcribing", level: 0, detail: "Transcribing with the existing speech service…" });
     void this.finish(job, audio);
@@ -232,6 +232,14 @@ export class Microphone {
       log.warn("microphone request failed");
     } finally {
       if (job.cancelled) this.update({ phase: "cancelled", transcript: undefined, detail: "Cancelled. A send already in progress may still arrive; no retry will be made." });
+      // Service latency must not consume the entire manual comparison window. Never extend the hard cap.
+      const recording = this.recording;
+      if (recording?.id === job.id) {
+        clearTimeout(recording.timer);
+        recording.until = Math.min(recording.until, Date.now() + 60_000);
+        recording.timer = setTimeout(() => this.clearRecording(), Math.max(0, recording.until - Date.now()));
+        recording.timer.unref();
+      }
       this.job = undefined; this.expires = Date.now() + 60_000;
     }
   }

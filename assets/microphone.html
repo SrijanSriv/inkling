@@ -23,7 +23,7 @@ button:first-child{background:#174b3c;color:white}button:disabled{opacity:.4;cur
 <button id="compare" disabled>Compare recognizers</button>
 <audio id="audio" controls preload="none" hidden></audio>
 <p id="replayNotice"></p>
-<small>First step: transcription only. Nothing you say will run a command or approve anything. Tap Done within 20 seconds. Listen back to compare the actual captured audio with the transcript. Only this latest recording is held in memory for one minute, then removed; nothing is archived. This link expires in 30 minutes.</small>
+<small>First step: transcription only. Nothing you say will run a command or approve anything. Tap Done within 20 seconds. Listen back to compare the actual captured audio with the transcript. Only this latest recording is held in memory until one minute after transcription finishes, with a three-minute maximum after Done; nothing is archived. This link expires in 30 minutes.</small>
 </main>
 <script>
 const token=location.hash.slice(1);history.replaceState(null,'',location.pathname);
