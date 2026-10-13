@@ -17,8 +17,9 @@ import { botPhone, groupInfo, link, markRead, releaseWhatsApp, nameCall, react, 
 import { startOperationNotifications } from "./operations.js";
 import { startReadingNotifications } from "./reading-sharing.js";
 import { mailReviewEnabled, startMailReview } from "./mail-review.js";
-import { microphoneLink, microphoneReply, microphoneMuteSwitch, startMicrophone } from "./microphone.js";
+import { microphoneLink, microphoneReply, microphoneMuteSwitch, microphonePhysicalMuted, startMicrophone } from "./microphone.js";
 import { speak } from "./voice.js";
+import { RoomSpeech } from "./room-speech.js";
 import { voiceErrorText } from "./voice-intake.js";
 import { startScheduler, type RunJob } from "./schedule.js";
 import { startChanges } from "./changes.js";
@@ -32,6 +33,8 @@ type Queued = { msg: InboundMessage; user: User; workflow?: boolean };
 
 // Messages that arrive while the assistant is still working on a chat's last one get answered together.
 const queues = new Map<string, { busy: boolean; pending: Queued[] }>();
+const roomSpeech = new RoomSpeech({muted:microphonePhysicalMuted});
+for(const signal of ["SIGTERM","SIGINT"] as const)process.once(signal,()=>roomSpeech.interrupt());
 
 // Group messages that weren't for the assistant, kept briefly (in memory only) so it can follow the conversation.
 const groupContext = new Map<string, string[]>();
@@ -226,6 +229,8 @@ async function drain(key: string, queue: { busy: boolean; pending: Queued[] }): 
       const reply = await respond(chat, incoming, chatActions(chat, chatJid, last.source === "microphone" ? undefined : last.key));
       const agentMs = Date.now()-agentStarted;
       stopTyping();
+      if(last.source==="microphone"&&!last.group&&last.key.id)void roomSpeech.reply(user.id,last.key.id,reply,last.microphone?.doneAt)
+        .catch(()=>log.warn("room speech unavailable"));
       // Local transcription uses text replies. Legacy cloud mode may still speak short replies when configured.
       let spoken = false;
       if (config.voiceReplies !== "text" && config.elevenLabsKey && last.text.startsWith("(voice note)") && speakable(reply)) {
@@ -356,6 +361,11 @@ const runJob: RunJob = async (target, prompt) => {
 /** Commands are handled here, never by the model, so sign-in links and account changes don't go through the model. */
 async function runCommand(chat: Chat, chatJid: string, command: string): Promise<string | undefined> {
   const { user, group } = chat;
+  if (/^\/mic speech (on|off|status)$/.test(command)) {
+    if(group||!user.owner)return "Room speech controls are owner-only in private chat.";
+    try{return roomSpeech.command(user.id,command.split(" ").at(-1) as "on"|"off"|"status");}
+    catch(error){return error instanceof Error?error.message:"Room speech unavailable.";}
+  }
   if (/^\/mic switch (on|off)$/.test(command)) {
     if(group||!user.owner||!getUsers().some(u=>u.id===user.id&&u.owner))return "Physical mic-switch controls are owner-only in private chat.";
     try {return microphoneMuteSwitch(user.id,command.endsWith(" on"));} catch(error) {return error instanceof Error?error.message:"Mic-switch control unavailable.";}
@@ -503,6 +513,9 @@ startPersonalWorker(async (userId, text) => {
 startScheduler(runJob);
 startMemoryUpkeep();
 startMicrophone({
+  interrupt:()=>roomSpeech.interrupt(),
+  capture:(owner,id,physical)=>roomSpeech.capture(owner,id,physical),
+  speechStatus:()=>roomSpeech.status(),
   available: () => link.connected && !handingOver,
   send: async (id, text, messageId) => {
     const current = getUsers().find(u => u.id === id);

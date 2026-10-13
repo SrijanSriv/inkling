@@ -22,6 +22,7 @@ MAX_SECONDS = 120
 LOCK = threading.Lock()
 GPU_LOCK = threading.Lock()
 INCREMENTAL = None
+SYNTHESIS = None
 UPSTREAM = os.environ.get('INKLING_WHISPER_UPSTREAM', 'http://127.0.0.1:8081').rstrip('/')
 MODEL = os.environ.get('INKLING_WHISPER_MODEL', '')
 SECRET = os.environ.get('INKLING_WHISPER_SECRET', '')
@@ -277,6 +278,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if not self.authorized():
             return self.answer(401, {'error': 'unauthorized'})
+        if self.path == '/synthesize':
+            return self.synthesize()
         mic = self.path == '/microphone' and bool(MIC_UPSTREAM)
         if self.path != '/transcribe' and not mic:
             return self.answer(404, {'error': 'not_found'})
@@ -330,6 +333,38 @@ class Handler(BaseHTTPRequestHandler):
                 GPU_LOCK.release()
             LOCK.release()
 
+    def synthesize(self):
+        from synthesis import SpeechError
+        if SYNTHESIS is None:
+            return self.answer(404, {'error': 'unavailable'})
+        try:
+            size = self.headers.get('Content-Length', '')
+            if (len(self.headers.get_all('Content-Length', [])) != 1 or self.headers.get('Transfer-Encoding')
+                    or self.headers.get('Content-Type') != 'application/json'
+                    or not re.fullmatch(r'[0-9]{1,4}', size) or not 0 < int(size) <= 6000):
+                raise SpeechError(400, 'invalid_request')
+            self.connection.settimeout(5)
+            raw = self.rfile.read(int(size))
+            if len(raw) != int(size):
+                raise SpeechError(400, 'invalid_request')
+            try:
+                payload = json.loads(raw)
+            except (ValueError, UnicodeError):
+                raise SpeechError(400, 'invalid_request')
+            audio = SYNTHESIS.run(payload)
+            self.send_response(200)
+            self.send_header('Content-Type', 'audio/wav')
+            self.send_header('Content-Length', str(len(audio)))
+            self.send_header('Cache-Control', 'no-store')
+            self.end_headers()
+            self.wfile.write(audio)
+        except SpeechError as error:
+            self.answer(error.status, {'error': error.code})
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        except Exception:
+            self.answer(503, {'error': 'unavailable'})
+
 
 if __name__ == '__main__':
     os.umask(0o077)
@@ -339,6 +374,9 @@ if __name__ == '__main__':
         raise SystemExit('Configure microphone language as auto, en or hi.')
     if not SECRET or not Path(MODEL).is_file() or MODEL.endswith('.en.bin'):
         raise SystemExit('Configure a secret and an existing multilingual model.')
+    if os.environ.get('INKLING_TTS_UPSTREAM'):
+        from synthesis import Synthesis
+        SYNTHESIS = Synthesis(os.environ['INKLING_TTS_UPSTREAM'], os.environ.get('INKLING_TTS_VOICE', 'af_bella'))
     if os.environ.get('INKLING_WHISPER_INCREMENTAL_MODEL'):
         from faster_backend import FasterBackend, speech_spans
         from incremental import Sessions

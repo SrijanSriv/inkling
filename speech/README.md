@@ -1,5 +1,31 @@
 # Local voice notes
 
+## Optional room speech output
+
+The gateway also supports `/synthesize` when `INKLING_TTS_UPSTREAM=http://127.0.0.1:8880` and
+`INKLING_TTS_VOICE=af_bella` are configured in its protected environment. Install `synthesis.py` beside
+`server.py`. Reuse an existing warm Kokoro service; the upstream stays loopback-only. Supported configured
+voices are `af_bella`, `af_nicole`, `am_eric`, and `hf_alpha`; cache the selected voice before live use.
+
+The authenticated request is JSON `{ "text": "Hello.", "voice": "af_bella" }`, with at most 800 code points
+and one matching configured voice. Successful output is bounded 24 kHz mono PCM16 WAV. No audio files are
+created. The gateway allows one request and has no synthesis queue, independently of recognition locks.
+If a lost/timed-out upstream request leaves compute completion unknown, further synthesis fails with
+`recovery_required`. Check Kokoro has finished/has no stuck request, restart it if needed, then restart the
+speech gateway to reset that latch. Do not repeatedly restart the gateway while Kokoro is still stuck.
+
+On the Pi, configure `INKLING_MIC_SPEECH=true`, `INKLING_MIC_SPEECH_SINK` to an exact real PipeWire node name,
+and `INKLING_MIC_SPEECH_VOICE` to the same voice. Physical mic-switch and conversation mode must already work.
+Then the owner can send `/mic speech on`, `/mic speech off`, or `/mic speech status` privately. The preference
+is encrypted and initially off. Only live owner physical-mic turns can speak; recovered turns and other input
+sources cannot. WhatsApp text remains independent. Audio is dropped on interruption, absent/muted speakers,
+active/unknown music state, oversized/unsupported answers or any speech failure. There are no automatic retries.
+The status command and owner mic page explain speech state; logs contain fixed reasons and timings, no content.
+English voices skip Devanagari text rather than pretending to speak Hindi. Romanized Hinglish pronunciation
+needs a listening trial; no automatic transliteration or extra model rewrite is performed.
+
+See [the v1 plan](../docs/speech-to-speech-v1-plan.md) and [the epic](../docs/speech-to-speech-epic.md).
+
 For controlled microphone diagnosis, `compare-whisper.py` reads one 0.3-20-second, 16 kHz mono PCM WAV from stdin
 and runs two or three explicitly configured local Whisper models on that exact recording. It uses independent CLI
 processes with two CPU threads and lower scheduling priority; it never reloads the live server. Supply `--cli`,

@@ -19,11 +19,14 @@ const RATE = 16000, MAX_BYTES = RATE * 2 * 20;
 const PAGE = readFileSync(new URL("../assets/microphone.html", import.meta.url), "utf8");
 type Phase = "idle" | "starting" | "listening" | "transcribing" | "comparing" | "sending" | "sent" | "cancelled" | "error";
 type Reply = { text: string; elapsedMs: number; at: number; id: string; delivered: boolean };
-type Status = { piReady?: boolean; muteSwitch?: SwitchState | "off"; incrementalAvailable?: boolean; partial?: string; latestReply?: Reply; busy?: boolean; phase: Phase; detail: string; seconds: number; level: number; signal: string; transcript?: string; id?: string; recordingExpiresAt?: number; canCompare?: boolean; comparison?: string; conversation?: boolean };
+type Status = { speech?: {state:string;reason?:string}; piReady?: boolean; muteSwitch?: SwitchState | "off"; incrementalAvailable?: boolean; partial?: string; latestReply?: Reply; busy?: boolean; phase: Phase; detail: string; seconds: number; level: number; signal: string; transcript?: string; id?: string; recordingExpiresAt?: number; canCompare?: boolean; comparison?: string; conversation?: boolean };
 type Job = { physical?: boolean; id: string; owner: string; recorder?: ChildProcessWithoutNullStreams; stream?: MicrophoneStream; deviceOffset?: number; device?: boolean; uploading?: boolean; submittedAt?: number; chunks: Buffer[]; bytes: number;
   samples: number; sum: number; energy: number; clipped: number; lastFrame: number; start: number;
   closing: boolean; cancelled: boolean; abort: AbortController; holdUntil?: number; deadline: NodeJS.Timeout; watchdog: NodeJS.Timeout };
 export type MicDependencies = {
+  interrupt?: ()=>void;
+  capture?: (owner:string,id:string,physical:boolean)=>void;
+  speechStatus?: ()=>{state:string;reason?:string};
   available: () => boolean;
   send: (owner: string, text: string, id: string) => Promise<void>;
   record?: () => ChildProcessWithoutNullStreams;
@@ -84,6 +87,7 @@ export class Microphone {
       this.switchActive=!!owner&&readSealedJson<{enabled:boolean}>(chatFile(owner.id,"mic-switch.json"),{enabled:true}).enabled===true;
     }
     if(config.micMuteSwitch)this.muteGate=new MicrophoneMuteGate(first=>{
+      this.deps.interrupt?.();
       const owner=getUsers().find(u=>u.owner);
       if(!owner||!this.input?.ready)return false;
       try {
@@ -116,6 +120,7 @@ export class Microphone {
         if(this.switchActive)this.muteGate?.feed(frame,!!this.job?.physical&&!this.job.closing);
       };
       const unavailable=()=>{
+        this.deps.interrupt?.();
         this.muteGate?.reset();
         const job=this.job;if(job&&!job.device&&!job.recorder&&!job.closing)this.stop(job,"device");
       };
@@ -127,7 +132,7 @@ export class Microphone {
     if(!getUsers().some(u=>u.id===owner&&u.owner))throw new Error("Only the owner can enable or disable the physical mic switch.");
     if(!this.muteGate)throw new Error("Physical mic-switch controls are not configured.");
     writeSealedJson(chatFile(owner,"mic-switch.json"),{enabled});
-    this.switchActive=enabled;this.muteGate.reset();
+    this.switchActive=enabled;this.muteGate.reset();this.deps.interrupt?.();
     if(!enabled&&this.job?.physical)this.control(owner,"cancel",this.job.id);
     return enabled ? "Physical mic control is on. First mute it for a second, then unmute to speak and mute to send. Keep each recording under 20 seconds."
       : "Physical mic control is off. You can use the page's hold button; the Pi input stays ready. A request already passed to the assistant may still finish.";
@@ -169,7 +174,7 @@ export class Microphone {
       this.expires = 0;
     }
     const valid = !!this.recording && Date.now() < this.recording.until;
-    return { ...this.state, latestReply, piReady:this.input?.ready, muteSwitch:this.muteGate&&getUsers().some(u=>u.id===owner&&u.owner)?(this.switchActive?this.muteGate.state:"off"):undefined, incrementalAvailable: config.micIncremental, conversation: config.micConversation, recordingExpiresAt: valid ? this.recording!.until : undefined,
+    return { ...this.state, speech:getUsers().some(u=>u.id===owner&&u.owner)?this.deps.speechStatus?.():undefined, latestReply, piReady:this.input?.ready, muteSwitch:this.muteGate&&getUsers().some(u=>u.id===owner&&u.owner)?(this.switchActive?this.muteGate.state:"off"):undefined, incrementalAvailable: config.micIncremental, conversation: config.micConversation, recordingExpiresAt: valid ? this.recording!.until : undefined,
       canCompare: valid && !!this.deps.compare && !this.job && !this.comparing };
   }
   private update(patch: Partial<Status>): void { this.state = { ...this.state, ...patch }; }
@@ -269,6 +274,7 @@ export class Microphone {
       start: Date.now(), lastFrame: Date.now(), closing: false, cancelled: false, abort: new AbortController(),
       holdUntil: held ? Date.now() + 3000 : undefined } as unknown as Job;
     this.job = job;
+    this.deps.capture?.(owner,`INKMIC${job.id.replaceAll("-", "")}`,physical);
     this.stateOwner = owner;
     this.state = { phase: this.input&&!device ? "listening" : "starting", detail: device ? "Opening your device microphone…" : this.input ? "Listening on the ready Pi microphone. Speak now; release to send." : "Opening the Pi microphone…", seconds: 0, level: 0, signal: "not checked", id: job.id };
     this.expires = 0;
@@ -492,10 +498,12 @@ export class Microphone {
       ...(pathname === "/hold" ? { id: this.job?.id, phase:this.state.phase, detail:this.state.detail } : {}) }); }
     catch (error) { return reply(409, { error: error instanceof Error ? error.message : "Control unavailable" }); }
   };
-  close(): void { this.input?.close();this.muteGate?.reset();this.comparing?.abort.abort(); if (this.comparing) this.comparing.cancelled = true; this.clearRecording(); if (this.job) { this.job.cancelled = true; this.job.abort.abort(); this.job.stream?.cancel(); if (!this.job.closing) this.stop(this.job, "cancel"); } this.sessions.clear(); this.replies.clear(); this.awaiting.clear(); }
+  physicalMuted(): boolean { return !!this.input?.ready&&this.switchActive&&this.muteGate?.state==="armed"; }
+  close(): void { this.deps.interrupt?.();this.input?.close();this.muteGate?.reset();this.comparing?.abort.abort(); if (this.comparing) this.comparing.cancelled = true; this.clearRecording(); if (this.job) { this.job.cancelled = true; this.job.abort.abort(); this.job.stream?.cancel(); if (!this.job.closing) this.stop(this.job, "cancel"); } this.sessions.clear(); this.replies.clear(); this.awaiting.clear(); }
 }
 
 let microphone: Microphone | undefined;
+export function microphonePhysicalMuted(): boolean { return microphone?.physicalMuted()??false; }
 export function microphoneMuteSwitch(owner: string, enabled: boolean): string {
   if(!microphone)throw new Error("Microphone controls are not available.");
   return microphone.setMuteSwitch(owner,enabled);
