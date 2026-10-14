@@ -47,6 +47,29 @@ needs a listening trial; no automatic transliteration or extra model rewrite is 
 
 See [the v1 plan](../docs/speech-to-speech-v1-plan.md) and [the epic](../docs/speech-to-speech-epic.md).
 
+### Switchable early preparation
+
+The owner can send `/mic flow early`, `/mic flow current`, or `/mic flow status` privately. `/mic flow`
+also shows the selected mode. This is independent of `/mic speech on|off`; selecting a flow does not
+enable room speech. The selection is encrypted alongside that preference and survives restarts.
+New installations and existing preferences without a flow retain `current`.
+
+`current` keeps the original final-answer speech and configured cached acknowledgement. `early` suppresses
+the starting acknowledgement and prepares at most one natural opening during the conversation-only model
+step. Audio is held until the complete answer passes the existing checks, then reused only on an exact
+speech-text prefix match. Short tails are merged by falling back to normal synthesis. Tool routing,
+revisions, unsupported text and newer captures discard the prepared opening. No extra model call is made.
+
+Visible text hooks are supported for Gemini and native Responses providers. Other adapters fall back to
+complete-answer synthesis without a filler in early mode. The physical owner/capture, speaker and music
+checks still apply. WhatsApp delivery and history remain unchanged. Switching modes interrupts old audio;
+it never replays the interrupted reply. Browser/device recordings are unaffected.
+
+This implements the preparation-first phase of [the early spoken replies plan](../docs/early-spoken-replies-plan.md),
+not playback of unchecked model text. Longer streaming answers offer more opportunity for overlap;
+short one-sentence answers and tool requests may not improve. Timing-only logs add `microphone first text delta`,
+`room speech opening prepared`, and `room speech opening reconciled` with a reuse boolean. Audio remains in RAM.
+
 ### Optional phrase output
 
 `INKLING_MIC_SPEECH_STREAMING=true` on the Pi selects the authenticated `/synthesize/stream` route.

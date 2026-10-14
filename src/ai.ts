@@ -35,11 +35,13 @@ export function ai(): OpenAI {
 export type ResponseParams = Omit<OpenAI.Responses.ResponseCreateParamsNonStreaming, "stream">;
 export interface ResponseStream {
   on(event: "response.output_item.added", listener: (event: { item: OpenAI.Responses.ResponseOutputItem }) => void): unknown;
+  /** Provisional visible text only. Adapters without this hook use the complete-answer path. */
+  onText?(listener: (event: { delta: string; itemId: string }) => void): unknown;
   finalResponse(): Promise<OpenAI.Responses.Response>;
 }
 export interface Responses {
   create(params: ResponseParams, options?: { timeout?: number; maxRetries?: number; signal?: AbortSignal }): Promise<OpenAI.Responses.Response>;
-  stream(params: ResponseParams): ResponseStream;
+  stream(params: ResponseParams, options?: { signal?: AbortSignal }): ResponseStream;
 }
 
 /** One model interface: Claude and Gemini are translated by their adapters; the others speak it natively. */
@@ -48,10 +50,11 @@ export function responses(): Responses {
   if (config.provider === "gemini") return geminiResponses();
   return {
     create: (params, options) => ai().responses.create({ ...params, stream: false }, options),
-    stream: (params) => {
-      const stream = ai().responses.stream(params as OpenAI.Responses.ResponseCreateParamsStreaming);
+    stream: (params, options) => {
+      const stream = ai().responses.stream(params as OpenAI.Responses.ResponseCreateParamsStreaming, options);
       return {
         on: (event, listener) => stream.on(event, listener),
+        onText: listener => stream.on("response.output_text.delta", event => listener({delta:event.delta,itemId:event.item_id})),
         finalResponse: () => stream.finalResponse(),
       };
     },

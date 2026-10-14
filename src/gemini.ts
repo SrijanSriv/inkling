@@ -103,10 +103,11 @@ function responseOf(completion: Completion): OpenAI.Responses.Response {
   } as OpenAI.Responses.Response;
 }
 
-async function streamed(params: ResponseParams, added: (name: string)=>void): Promise<OpenAI.Responses.Response> {
+async function streamed(params: ResponseParams, added: (name: string)=>void,
+  text: (event: {delta:string;itemId:string})=>void, options?: {signal?:AbortSignal}): Promise<OpenAI.Responses.Response> {
   // Gemini sometimes omits tool-call indexes. Consume raw chunks instead of the SDK accumulator,
   // using call IDs to join fragments and retaining the provider's signature metadata unchanged.
-  const stream = await gemini().chat.completions.create({...bodyOf(params),stream:true,stream_options:{include_usage:true}});
+  const stream = await gemini().chat.completions.create({...bodyOf(params),stream:true,stream_options:{include_usage:true}},options);
   const calls = new Map<number, OpenAI.Chat.Completions.ChatCompletionMessageFunctionToolCall>();
   const byId = new Map<string,number>();
   const announced = new Set<number>();
@@ -122,7 +123,7 @@ async function streamed(params: ResponseParams, added: (name: string)=>void): Pr
     if (choice.finish_reason) finish = choice.finish_reason;
     const {content,refusal,tool_calls,...extra} = choice.delta;
     Object.assign(message,extra);
-    if (content) message.content = (message.content || "") + content;
+    if (content) {message.content = (message.content || "") + content;text({delta:content,itemId:"gemini-visible-answer"});}
     if (refusal) message.refusal = (message.refusal || "") + refusal;
     if ((message.content?.length ?? 0) > 262144) throw new Error("Oversized Gemini reply.");
     for (const part of tool_calls ?? []) {
@@ -162,14 +163,16 @@ async function streamed(params: ResponseParams, added: (name: string)=>void): Pr
 export function geminiResponses(): Responses {
   return {
     create: async (params,options) => responseOf(await gemini().chat.completions.create(bodyOf(params),options)),
-    stream: (params): ResponseStream => {
+    stream: (params,options): ResponseStream => {
       const listeners: ((event: {item:OpenAI.Responses.ResponseOutputItem})=>void)[] = [];
+      const textListeners: ((event: {delta:string;itemId:string})=>void)[] = [];
       let pending: Promise<OpenAI.Responses.Response> | undefined;
       return {
         on: (_event,listener)=>listeners.push(listener),
+        onText: listener=>textListeners.push(listener),
         finalResponse: () => pending ??= streamed(params,name=>{
           for (const listener of listeners) listener({item:{type:"function_call",name} as OpenAI.Responses.ResponseFunctionToolCall});
-        }),
+        },event=>{for(const listener of textListeners)listener(event);},options),
       };
     },
   };

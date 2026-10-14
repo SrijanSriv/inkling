@@ -210,7 +210,7 @@ export function claudeResponses(): Responses {
       const steps = await untilDone(bodyOf(params, CREATE_MAX_TOKENS), (body) => anthropic().beta.messages.create(body, options));
       return responseOf(String(params.model), steps);
     },
-    stream: (params): ResponseStream => {
+    stream: (params, options): ResponseStream => {
       const listeners: ((event: { item: OpenAI.Responses.ResponseOutputItem }) => void)[] = [];
       const added = (item: Partial<OpenAI.Responses.ResponseOutputItem>) => {
         for (const listener of listeners) listener({ item: item as OpenAI.Responses.ResponseOutputItem });
@@ -219,7 +219,7 @@ export function claudeResponses(): Responses {
         on: (_event, listener) => listeners.push(listener),
         finalResponse: async () => {
           const steps = await untilDone(bodyOf(params, STREAM_MAX_TOKENS), async (body) => {
-            const stream = anthropic().beta.messages.stream(body);
+            const stream = anthropic().beta.messages.stream(body, options);
             // The moment a tool or a search starts, like the Responses API's output_item.added.
             for await (const event of stream) {
               if (event.type !== "content_block_start") continue;

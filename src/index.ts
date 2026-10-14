@@ -227,7 +227,8 @@ async function drain(key: string, queue: { busy: boolean; pending: Queued[] }): 
     try {
       const incoming: Incoming[] = batch.map(({ msg, user }) => ({ ...msg, requestId: msg.key.id || undefined, from: user.name }));
       const agentStarted = Date.now();
-      const reply = await respond(chat, incoming, chatActions(chat, chatJid, last.source === "microphone" ? undefined : last.key));
+      const preparation=last.source==="microphone"&&!last.group&&last.key.id?roomSpeech.prepare(user.id,last.key.id):undefined;
+      const reply = await respond(chat, incoming, chatActions(chat, chatJid, last.source === "microphone" ? undefined : last.key),preparation);
       const agentMs = Date.now()-agentStarted;
       answerReady=true;
       stopTyping();
@@ -364,6 +365,11 @@ const runJob: RunJob = async (target, prompt) => {
 /** Commands are handled here, never by the model, so sign-in links and account changes don't go through the model. */
 async function runCommand(chat: Chat, chatJid: string, command: string): Promise<string | undefined> {
   const { user, group } = chat;
+  if (/^\/mic flow(?: (current|early|status))?$/.test(command)) {
+    if(group||!user.owner)return "Room speech controls are owner-only in private chat.";
+    try{return roomSpeech.flowCommand(user.id,(command.split(" ")[2]??"status") as "current"|"early"|"status");}
+    catch(error){return error instanceof Error?error.message:"Mic flow unavailable.";}
+  }
   if (/^\/mic speech (on|off|status)$/.test(command)) {
     if(group||!user.owner)return "Room speech controls are owner-only in private chat.";
     try{return roomSpeech.command(user.id,command.split(" ").at(-1) as "on"|"off"|"status");}
