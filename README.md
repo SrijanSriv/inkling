@@ -9,13 +9,20 @@ Optional local voice-note transcription: run the [private speech gateway](speech
 whisper.cpp server on another machine. Registered users can speak English or Hindi/English and get text replies;
 the Pi keeps the normal chat permissions and encrypted history.
 
-Optional Pi microphone calibration: the owner's private **`/mic`** command opens a short-lived home-network
-Listen/Done page. It records the Pi microphone only while requested, shows input levels, and sends the actual
-Whisper transcript to the owner's WhatsApp without acting on it. **Listen back** plays the original captured clip;
-only the latest clip is held in memory for one minute, with no recording archive. This first stage has no wake-word detector or
-automatic assistant answer. See [the microphone design and acceptance plan](docs/microphone-v1.md).
-An optional **Compare recognizers** button runs a configured offline diagnostic worker on that same confirmed clip;
-it does not change the speech server's active model or act on either candidate transcript.
+Optional **`/mic`** in any registered private chat opens a short-lived talk page. Hold the floating
+circle (or Ctrl on Windows / Command on Mac), speak, then release. Choose the Pi microphone or the
+phone/laptop microphone; device capture needs trusted HTTPS and microphone permission. When microphone
+conversation mode is configured, this uses the normal assistant's private memory and authorized tools,
+shows its reply and elapsed time, and still sends WhatsApp text. Incremental transcription is selected
+by default when configured. Tap **Enable sound** once to hear streamed Kokoro replies on the device;
+starting another recording or pressing **Stop speaking** interrupts playback. Complex/unsupported
+answers stay as text, and synthesis failures do not retry the assistant's actions. Sound is local to
+the open page; room-speaker controls remain separate. No new paid voice API is needed.
+
+Without conversation mode, the page remains a transcription check. **Listen back** plays the latest
+captured clip, retained only in memory until one minute after decoding, capped at three minutes after
+release. **Compare recognizers** runs the configured diagnostic on that same clip without changing the
+active model or acting on the results. See [the microphone design](docs/microphone-v1.md).
 
 A personal assistant that lives in WhatsApp, for you and a few friends. You text it the way you'd text a friend, on
 your own or in a group chat, and it texts back. Each person gets their own private conversation, memory and

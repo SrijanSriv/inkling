@@ -18,10 +18,15 @@ progress{width:100%;height:20px}button{font:inherit;border-radius:12px;border:1p
 <label><input type="radio" name="mic" value="device"> This phone or laptop</label>
 </fieldset>
 <section aria-label="Latest assistant reply"><h2>Latest reply</h2><p id="replyPlaceholder" class="reply-placeholder">Your reply will appear here after you speak.</p><p id="latestReply" hidden></p><p id="replyTime"></p></section>
+<fieldset><legend>Reply sound</legend>
+<label><input id="speakReplies" type="checkbox" checked> Speak replies on this phone or laptop</label>
+<button id="enableSound" type="button">Enable sound</button><button id="stopSound" type="button" disabled>Stop speaking</button>
+<p id="soundNotice" role="status">Tap Enable sound once, or hold the circle, to allow audio. WhatsApp text stays on.</p>
+</fieldset>
 <p id="permissionNotice">The Pi microphone is selected. Your device microphone stays off.</p>
 <div id="phase" role="status" aria-live="polite">Connecting…</div>
 <p id="detail"></p>
-<label id="liveChoice" hidden><input id="live" type="checkbox"> Live transcript (experimental)</label>
+<label id="liveChoice" hidden><input id="live" type="checkbox" checked> Incremental transcription</label>
 <p id="partial" aria-label="Draft transcript"></p>
 <progress id="level" max="1" value="0" aria-label="Microphone input level"></progress>
 <p><span id="seconds">0.0</span> seconds · <span id="signal">not checked</span></p>
@@ -38,9 +43,29 @@ progress{width:100%;height:20px}button{font:inherit;border-radius:12px;border:1p
 <div class="talk-wrap"><button id="talk" type="button" disabled aria-label="Hold to speak, release to send" aria-pressed="false" aria-describedby="holdHelp"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg><span id="talkLabel">Hold to speak</span></button><span id="shortcutHint" class="shortcut-hint">Hold to speak · release to send</span></div>
 <script type="module">
 import {DeviceMicrophone} from "./microphone-device.js";
+import {MicrophoneSpeaker} from "./microphone-speaker.js";
 const endpoint=path=>new URL('.'+path,location.href).href;
 const token=location.hash.slice(1);history.replaceState(null,'',location.pathname);
 const elements=Object.fromEntries(['phase','detail','level','seconds','signal','talk','cancel','transcript','replay','compare','audio','replayNotice'].map(id=>[id,document.getElementById(id)]));
+const speakReplies=document.getElementById('speakReplies'),soundNotice=document.getElementById('soundNotice'),stopSound=document.getElementById('stopSound');
+const speaker=new MicrophoneSpeaker(text=>{soundNotice.textContent=text;});
+let soundReplyId,initialReplySeen=false;
+async function enableSound(){try{await speaker.unlock();soundNotice.textContent='Sound enabled. New replies will play here.';}catch(error){soundNotice.textContent=error.message;}}
+document.getElementById('enableSound').onclick=enableSound;
+stopSound.onclick=()=>{speaker.stop();stopSound.disabled=true;soundNotice.textContent='Stopped speaking.';};
+speakReplies.onchange=()=>{if(!speakReplies.checked){speaker.stop();stopSound.disabled=true;soundNotice.textContent='Replies will appear as text.';}else void enableSound();};
+async function spokenReply(reply){
+ if(!initialReplySeen){initialReplySeen=true;soundReplyId=reply?.id;return;}
+ if(!reply||reply.id===soundReplyId)return;
+ soundReplyId=reply.id;
+ if(!speakReplies.checked||document.hidden||hold&&!hold.released)return;
+ if(!reply.speakable){soundNotice.textContent='This reply is best read as text.';return;}
+ stopSound.disabled=false;soundNotice.textContent='Preparing spoken reply…';
+ try{await speaker.play(endpoint('/reply-audio?id='+encodeURIComponent(reply.id)),token,()=>{
+   if(submission?.id===reply.id)voiceElapsed=(performance.now()-submission.start)/1000;
+ });}catch(error){soundNotice.textContent=error.message;}
+ finally{stopSound.disabled=!speaker.active;}
+}
 let stopped=false,requesting=false,hold,lastStatus,deviceReady=false,localStatus;
 const micChoices=document.getElementById('micChoices'),permissionNotice=document.getElementById('permissionNotice');
 const selectedMic=()=>document.querySelector('input[name="mic"]:checked').value;
@@ -51,7 +76,7 @@ micChoices.onchange=async()=>{
  catch(error){deviceReady=false;permissionNotice.textContent=error.message;}
  finally{requesting=false;drawControls();}
 };
-let recordingId,recordingUntil=0,blobUrl,replayTimer,submission,shownReplyId,shownElapsed;
+let recordingId,recordingUntil=0,blobUrl,replayTimer,submission,shownReplyId,shownElapsed,voiceElapsed;
 function clearReplay(){clearTimeout(replayTimer);elements.audio.pause();elements.audio.removeAttribute('src');elements.audio.load();elements.audio.hidden=true;if(blobUrl)URL.revokeObjectURL(blobUrl);blobUrl=undefined;elements.replay.disabled=true;}
 async function call(path,method='GET'){
  const response=await fetch(endpoint(path),{method,headers:{Authorization:'Bearer '+token},cache:'no-store',signal:AbortSignal.timeout(5000)});
@@ -120,6 +145,9 @@ function drainDevice(session){
 }
 async function startHold(pointer,key){
  if(stopped||requesting||hold||elements.talk.disabled)return;
+ speaker.stop();stopSound.disabled=true;
+ // Resume inside the gesture before any network wait, as required by mobile autoplay rules.
+ if(speakReplies.checked)void enableSound();
  const session={pointer,key,device:selectedMic()==='device',incremental:document.getElementById('live').checked,devicePending:[],deviceQueued:0,deviceOffset:0,released:false,cancel:false,settled:false,finishing:false};hold=session;requesting=true;clearReplay();drawControls();
  if(pointer!==undefined)try{elements.talk.setPointerCapture(pointer);}catch{releaseHold(true);}
  try{
@@ -172,6 +200,7 @@ window.addEventListener('keydown',event=>{
 });
 window.addEventListener('blur',()=>releaseHold(true));
 function leavePage(){
+ speaker.stop();stopSound.disabled=true;
  const session=hold;releaseHold(true);
  if(session?.id)fetch(endpoint('/cancel?id='+encodeURIComponent(session.id)),{method:'POST',headers:{Authorization:'Bearer '+token},keepalive:true}).catch(()=>{});
 }
@@ -184,9 +213,9 @@ async function poll(){
   document.getElementById('liveChoice').hidden=!remote.incrementalAvailable;if(!remote.incrementalAvailable)document.getElementById('live').checked=false;
   if(selectedMic()==='pi'&&remote.piReady!==undefined)permissionNotice.textContent=remote.piReady?'Pi microphone ready. Hold the circle to speak. Your device microphone stays off.':'The Pi microphone is reconnecting. Your device microphone stays off.';
   document.getElementById('partial').textContent=remote.partial&&!remote.transcript?'Draft hearing: '+remote.partial:'';
-  const reply=remote.latestReply;document.getElementById('replyPlaceholder').hidden=!!reply;document.getElementById('latestReply').hidden=!reply;document.getElementById('latestReply').textContent=reply?.text||'';
-  if(reply&&reply.id!==shownReplyId){shownReplyId=reply.id;shownElapsed=submission?.id===reply.id?performance.now()-submission.start:undefined;}
-  document.getElementById('replyTime').textContent=reply?`${((shownElapsed??reply.elapsedMs)/1000).toFixed(1)} seconds ${shownElapsed!==undefined?'from release to the reply appearing here':'from submitting audio to the reply being ready'}${reply.delivered?' · sent to WhatsApp':' · WhatsApp delivery not confirmed'}`:'';
+  const reply=remote.latestReply;void spokenReply(reply);document.getElementById('replyPlaceholder').hidden=!!reply;document.getElementById('latestReply').hidden=!reply;document.getElementById('latestReply').textContent=reply?.text||'';
+  if(reply&&reply.id!==shownReplyId){shownReplyId=reply.id;shownElapsed=submission?.id===reply.id?performance.now()-submission.start:undefined;voiceElapsed=undefined;}
+  document.getElementById('replyTime').textContent=reply?`${((shownElapsed??reply.elapsedMs)/1000).toFixed(1)} seconds ${shownElapsed!==undefined?'from release to the reply appearing here':'from submitting audio to the reply being ready'}${reply.delivered?' · sent to WhatsApp':' · WhatsApp delivery not confirmed'}${voiceElapsed!==undefined?' · voice started '+voiceElapsed.toFixed(1)+' seconds after release':''}`:'';
   document.getElementById('modeNotice').textContent=(s.conversation?'Conversation mode: your transcript goes to the assistant, which can answer or use its normal tools. Room speech cannot approve outgoing drafts or change access/admin settings.':'Transcription check: no assistant actions run.')+(remote.muteSwitch?' Physical mic switch (owner): '+remote.muteSwitch+'. Unmute to speak, mute to send. Send /mic switch off in private chat to use only the page button.':'')+(remote.speech?' Room speech: '+remote.speech.state+(remote.speech.reason?' ('+(remote.speech.detail||remote.speech.reason.replaceAll('_',' '))+')':'')+'.':'')+' Release within 20 seconds. Listen back is available until one minute after transcription, capped at three minutes after release. Audio is never archived. Conversation transcripts use your normal encrypted chat history. This link expires in 30 minutes.';
   elements.phase.textContent=s.phase[0].toUpperCase()+s.phase.slice(1);elements.detail.textContent=s.detail;
   elements.level.value=s.level;elements.seconds.textContent=s.seconds.toFixed(1);elements.signal.textContent=s.signal;
@@ -194,8 +223,8 @@ async function poll(){
   if(recordingId!==s.id||!s.recordingExpiresAt){clearReplay();elements.replayNotice.textContent='';}
   recordingId=s.id;recordingUntil=s.recordingExpiresAt||0;elements.replay.disabled=!recordingUntil||requesting;
   drawControls(s);
- }catch(error){releaseHold(true);disable();clearReplay();elements.phase.textContent='Unavailable';elements.detail.textContent=error.message;elements.level.value=0;elements.transcript.textContent='';}
- if(!stopped)setTimeout(poll,500);
+ }catch(error){speaker.stop();stopSound.disabled=true;releaseHold(true);disable();clearReplay();elements.phase.textContent='Unavailable';elements.detail.textContent=error.message;elements.level.value=0;elements.transcript.textContent='';}
+ if(!stopped)setTimeout(poll,250);
 }
 for(const action of ['cancel','compare'])elements[action].onclick=async()=>{
  if(action==='cancel'&&hold){releaseHold(true);return;}
@@ -205,6 +234,7 @@ for(const action of ['cancel','compare'])elements[action].onclick=async()=>{
  finally{requesting=false;drawControls();}
 };
 elements.replay.onclick=async()=>{
+ speaker.stop();stopSound.disabled=true;
  const id=recordingId,until=recordingUntil;elements.replay.disabled=true;
  try{
   const response=await fetch(endpoint('/audio?id='+encodeURIComponent(id)),{headers:{Authorization:'Bearer '+token},cache:'no-store',signal:AbortSignal.timeout(5000)});

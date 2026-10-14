@@ -12,13 +12,14 @@ import { reviewMicrophone } from "./microphone-review.js";
 import { MicrophoneStream } from "./microphone-stream.js";
 import { transcribeMicrophone } from "./microphone-transcription.js";
 import { WarmMicrophoneInput, MicrophoneMuteGate, MICROPHONE_PROPERTIES, type SwitchState, type PiMicrophoneInput } from "./microphone-input.js";
+import { speechText, synthesizeSpeechChunks } from "./room-speech.js";
 import { chatFile } from "./store.js";
 import { readSealedJson, writeSealedJson } from "./vault.js";
 
 const RATE = 16000, MAX_BYTES = RATE * 2 * 20;
 const PAGE = readFileSync(new URL("../assets/microphone.html", import.meta.url), "utf8");
 type Phase = "idle" | "starting" | "listening" | "transcribing" | "comparing" | "sending" | "sent" | "cancelled" | "error";
-type Reply = { text: string; elapsedMs: number; at: number; id: string; delivered: boolean };
+type Reply = { speakable: boolean; text: string; elapsedMs: number; at: number; id: string; delivered: boolean };
 type Status = { speech?: {state:string;reason?:string}; piReady?: boolean; muteSwitch?: SwitchState | "off"; incrementalAvailable?: boolean; partial?: string; latestReply?: Reply; busy?: boolean; phase: Phase; detail: string; seconds: number; level: number; signal: string; transcript?: string; id?: string; recordingExpiresAt?: number; canCompare?: boolean; comparison?: string; conversation?: boolean };
 type Job = { physical?: boolean; id: string; owner: string; recorder?: ChildProcessWithoutNullStreams; stream?: MicrophoneStream; deviceOffset?: number; device?: boolean; uploading?: boolean; submittedAt?: number; chunks: Buffer[]; bytes: number;
   samples: number; sum: number; energy: number; clipped: number; lastFrame: number; start: number;
@@ -28,6 +29,7 @@ export type MicDependencies = {
   capture?: (owner:string,id:string,physical:boolean)=>void;
   sealed?: (owner:string,id:string)=>void;
   speechStatus?: ()=>{state:string;reason?:string};
+  speechStream?: (text:string,signal:AbortSignal)=>AsyncIterable<Buffer>;
   available: () => boolean;
   send: (owner: string, text: string, id: string) => Promise<void>;
   record?: () => ChildProcessWithoutNullStreams;
@@ -67,6 +69,8 @@ export function microphoneWav(pcm: Buffer): Buffer {
 
 /** Manual captures and replies stay in the registered person's private chat. Optional conversation mode never confirms outgoing drafts. */
 export class Microphone {
+  private speech?: {owner:string;abort:AbortController};
+  private speechAttempts = new Map<string, {id:string;at:number}>();
   private sessions = new Map<string, { owner: string; until: number }>();
   private job?: Job;
   private state: Status = { phase: "idle", detail: "Hold the circle, wait for Listening, then speak. Release to send (20 seconds maximum).", seconds: 0, level: 0, signal: "not checked" };
@@ -157,15 +161,17 @@ export class Microphone {
   private prune(): void {
     const now = Date.now();
     for (const [key, value] of this.replies) if (now-value.at > 30*60_000) this.replies.delete(key);
+    for (const [key, value] of this.speechAttempts) if(now-value.at>120_000)this.speechAttempts.delete(key);
     for (const [key, value] of this.awaiting) if (value.until < now) this.awaiting.delete(key);
     for (const [key, times] of this.arrivals) if (!times.some(at=>now-at<600_000)) this.arrivals.delete(key);
   }
   completed(user: string, messageId: string, text: string, elapsedMs: number, delivered: boolean): void {
     this.prune();
     const pending = this.awaiting.get(messageId);
-    if (!pending || pending.user !== user || !getUsers().some(u=>u.id===user)) return;
+    const existing=this.replies.get(user);
+    if (((!pending || pending.user !== user) && existing?.id!==messageId) || !getUsers().some(u=>u.id===user)) return;
     this.awaiting.delete(messageId);
-    this.replies.set(user, { text: text.slice(0,32000), elapsedMs: Math.max(0,elapsedMs), at: Date.now(), id: messageId, delivered });
+    this.replies.set(user, { speakable:!!speechText(text)&&!!config.whisperUrl&&!!config.whisperSecret, text: text.slice(0,32000), elapsedMs: Math.max(0,elapsedMs), at: Date.now(), id: messageId, delivered });
     if (this.stateOwner === user) this.update({ detail: delivered ? "Reply sent to WhatsApp and shown below." : "Reply ready below, but WhatsApp delivery was not confirmed." });
   }
   status(owner?: string): Status {
@@ -269,6 +275,7 @@ export class Microphone {
   }
 
   private begin(owner: string, held = false, device = false, incremental = false, physical = false): void {
+    if(this.speech?.owner===owner)this.speech.abort.abort();
     this.clearRecording();
     if(this.input&&!device&&!this.input.ready)throw new Error("The Pi microphone is reconnecting. Wait a moment and retry.");
     if(this.input&&!device&&!physical)this.input.drain?.().fill(0); // No pre-button audio from a previous person.
@@ -467,12 +474,35 @@ export class Microphone {
     };
     const url = new URL(req.url || "/", "http://localhost"), pathname = url.pathname;
     if (req.method === "GET" && pathname === "/") return reply(200, PAGE, "text/html");
-    if (req.method === "GET" && ["/microphone-device.js","/microphone-recorder.js"].includes(pathname)) {
+    if (req.method === "GET" && ["/microphone-device.js","/microphone-recorder.js","/microphone-speaker.js"].includes(pathname)) {
       return reply(200,readFileSync(new URL(`../assets${pathname}`,import.meta.url)),"text/javascript");
     }
     const owner = this.authorized(req.headers.authorization?.replace(/^Bearer /, "") || "");
     if (!owner) return reply(403, { error: "Link expired or unavailable. Send /mic in your private WhatsApp chat for a fresh link." });
     if (req.method === "GET" && pathname === "/status") return reply(200, this.status(owner));
+    if (req.method === "GET" && pathname === "/reply-audio") {
+      const latest=this.replies.get(owner),id=url.searchParams.get("id"),now=Date.now();
+      if(!latest||latest.id!==id||now-latest.at>120_000||!latest.speakable)return reply(410,{error:"Spoken reply unavailable. The text is still here."});
+      const attempt=this.speechAttempts.get(owner);
+      if(this.speech||attempt?.id===id&&now-attempt.at<5000)return reply(429,{error:"Speech is busy. Try again shortly."});
+      const text=speechText(latest.text);
+      if(!text)return reply(409,{error:"This reply is best read as text."});
+      const abort=new AbortController(),active={owner,abort};this.speech=active;
+      this.speechAttempts.set(owner,{id:id!,at:now});
+      const disconnected=()=>abort.abort();res.once("close",disconnected);
+      try {
+        for await(const wav of (this.deps.speechStream??synthesizeSpeechChunks)(text,abort.signal)){
+          if(abort.signal.aborted)break;
+          if(!this.authorized(req.headers.authorization?.replace(/^Bearer /,"")||"")){abort.abort();break;}
+          if(!res.headersSent)res.writeHead(200,{"content-type":"application/x-inkling-wav-stream","cache-control":"no-store","x-content-type-options":"nosniff"});
+          const frame=Buffer.alloc(4+wav.length);frame.writeUInt32BE(wav.length);wav.copy(frame,4);
+          await new Promise<void>((resolve,reject)=>res.write(frame,error=>{frame.fill(0);error?reject(error):resolve();}));
+        }
+        if(!abort.signal.aborted){if(res.headersSent)res.end(Buffer.alloc(4));else reply(503,{error:"Speech unavailable. Your text reply is unaffected."});}
+      } catch {if(!res.headersSent)reply(503,{error:"Speech unavailable. Your text reply is unaffected."});else res.destroy();}
+      finally {res.removeListener("close",disconnected);abort.abort();if(!res.writableEnded)res.destroy();if(this.speech===active)this.speech=undefined;}
+      return;
+    }
     if (req.method === "GET" && pathname === "/audio") {
       const recording = this.recording;
       if (!recording || recording.owner !== owner || recording.id !== url.searchParams.get("id") || Date.now() >= recording.until) return reply(410, { error: "Recording expired or unavailable. Make a new short test." });
@@ -502,7 +532,7 @@ export class Microphone {
     catch (error) { return reply(409, { error: error instanceof Error ? error.message : "Control unavailable" }); }
   };
   physicalMuted(): boolean { return !!this.input?.ready&&this.switchActive&&this.muteGate?.state==="armed"; }
-  close(): void { this.deps.interrupt?.();this.input?.close();this.muteGate?.reset();this.comparing?.abort.abort(); if (this.comparing) this.comparing.cancelled = true; this.clearRecording(); if (this.job) { this.job.cancelled = true; this.job.abort.abort(); this.job.stream?.cancel(); if (!this.job.closing) this.stop(this.job, "cancel"); } this.sessions.clear(); this.replies.clear(); this.awaiting.clear(); }
+  close(): void { this.speech?.abort.abort();this.speechAttempts.clear();this.deps.interrupt?.();this.input?.close();this.muteGate?.reset();this.comparing?.abort.abort(); if (this.comparing) this.comparing.cancelled = true; this.clearRecording(); if (this.job) { this.job.cancelled = true; this.job.abort.abort(); this.job.stream?.cancel(); if (!this.job.closing) this.stop(this.job, "cancel"); } this.sessions.clear(); this.replies.clear(); this.awaiting.clear(); }
 }
 
 let microphone: Microphone | undefined;

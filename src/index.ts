@@ -244,6 +244,7 @@ async function drain(key: string, queue: { busy: boolean; pending: Queued[] }): 
         }
       }
       if (last.source === "microphone" && last.microphone) {
+        microphoneReply(user.id,last.key.id!,reply,Date.now()-last.microphone.doneAt,false);
         try {
           await sendReply(chatJid,reply);
           microphoneReply(user.id,last.key.id!,reply,Date.now()-last.microphone.doneAt,true);

@@ -11,6 +11,8 @@ class MicProxy(unittest.TestCase):
     def setUp(self):
         self.seen = []
         seen = self.seen
+        self.finish_stream = threading.Event()
+        finish_stream = self.finish_stream
 
         class Upstream(BaseHTTPRequestHandler):
             def log_message(self, *_):
@@ -18,6 +20,15 @@ class MicProxy(unittest.TestCase):
 
             def do_GET(self):
                 seen.append((self.command, self.path, self.headers.get('Authorization'), b''))
+                if self.path.startswith('/reply-audio'):
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/x-inkling-wav-stream')
+                    self.end_headers()
+                    self.wfile.write(b'first')
+                    self.wfile.flush()
+                    finish_stream.wait(2)
+                    self.wfile.write(b'x'*300000)
+                    return
                 data = json.dumps({'path': self.path}).encode()
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json')
@@ -63,11 +74,23 @@ class MicProxy(unittest.TestCase):
         self.assertEqual(self.seen[-1][2], self.auth['Authorization'])
 
     def test_private_routes_require_bearer_and_other_services_not_proxied(self):
-        for path in ('/mic/status', '/mic/audio?id=fixture', '/mic/input'):
+        for path in ('/mic/status', '/mic/audio?id=fixture', '/mic/reply-audio?id=fixture', '/mic/input'):
             self.assertEqual(self.request(path)[0], 403 if not path.endswith('/input') else 404)
         for path in ('/mic/../health', '/mic/browser', '/mic/connect/google', '/mic//status', '/status'):
             self.assertEqual(self.request(path, headers=self.auth)[0], 404)
         self.assertEqual(self.seen, [])
+
+    def test_speech_stream_arrives_before_upstream_finishes(self):
+        connection = http.client.HTTPConnection('127.0.0.1', self.receiver.server_port, timeout=2)
+        self.addCleanup(connection.close)
+        self.addCleanup(self.finish_stream.set)
+        connection.request('GET', '/mic/reply-audio?id=fixture', headers=self.auth)
+        response = connection.getresponse()
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.read(5), b'first')
+        self.assertFalse(self.finish_stream.is_set())
+        self.finish_stream.set()
+        self.assertEqual(len(response.read()), 300000)
 
     def test_upload_query_origin_and_body_preserved(self):
         status, _, _ = self.request('/mic/input?id=fixture', 'POST', b'fixture',

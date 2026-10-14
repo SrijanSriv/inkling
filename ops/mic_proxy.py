@@ -3,9 +3,9 @@ import http.client
 import re
 from urllib.parse import urlsplit
 
-GET = {'/', '/microphone-device.js', '/microphone-recorder.js', '/status', '/audio'}
+GET = {'/', '/microphone-device.js', '/microphone-recorder.js', '/microphone-speaker.js', '/status', '/audio', '/reply-audio'}
 POST = {'/hold', '/held', '/done', '/cancel', '/compare', '/listen', '/input', '/chunk'}
-PUBLIC = {'/', '/microphone-device.js', '/microphone-recorder.js'}
+PUBLIC = {'/', '/microphone-device.js', '/microphone-recorder.js', '/microphone-speaker.js'}
 MAX_AUDIO = 640044
 RESPONSE_HEADERS = {'content-type', 'cache-control', 'referrer-policy', 'x-content-type-options',
                     'x-frame-options', 'content-security-policy'}
@@ -44,7 +44,8 @@ def proxy(handler, configuration):
     if size > (MAX_AUDIO if path == '/input' else 16000 if path == '/chunk' else 0):
         handler.reply(413)
         return True
-    connection = http.client.HTTPConnection('127.0.0.1', port, timeout=10)
+    connection = http.client.HTTPConnection('127.0.0.1', port, timeout=15 if path == '/reply-audio' else 10)
+    started = False
     try:
         body = handler.rfile.read(size) if size else None
         if body is not None and len(body) != size:
@@ -56,6 +57,26 @@ def proxy(handler, configuration):
                 headers[key] = handler.headers[key]
         connection.request(handler.command, path+('?' + target.query if target.query else ''), body=body, headers=headers)
         response = connection.getresponse()
+        if path == '/reply-audio' and response.status == 200:
+            handler.send_response(200)
+            for key, value in response.getheaders():
+                if key.lower() in RESPONSE_HEADERS:
+                    handler.send_header(key, value)
+            handler.send_header('Connection', 'close')
+            handler.end_headers()
+            handler.close_connection = True
+            started = True
+            total = 0
+            while True:
+                chunk = response.read1(65536)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > 2200036:
+                    break
+                handler.wfile.write(chunk)
+                handler.wfile.flush()
+            return True
         maximum = MAX_AUDIO if path == '/audio' else 256000
         content = response.read(maximum+1)
         if len(content) > maximum:
@@ -71,7 +92,9 @@ def proxy(handler, configuration):
         handler.end_headers()
         handler.wfile.write(content)
     except (OSError, http.client.HTTPException):
-        handler.reply(502)
+        if not started:
+            handler.reply(502)
+        handler.close_connection = True
     finally:
         connection.close()
     return True
