@@ -7,8 +7,8 @@ exposed to the conversational model.
 
 ## Household use
 
-Registered members of the configured group can ask to add groceries, search products, select a
-returned P-number for an existing B-number basket line, and request checkout with Google Pay or COD.
+Registered members of the configured group can ask to add groceries, search products, let the assistant choose suitable packs for their requests or choose a
+returned P-number for an existing B-number basket line themselves, and request checkout with Google Pay or COD.
 For example: “inkling, search milk”, “inkling, choose P2 for B1”, then “inkling, checkout with Google Pay”.
 The assistant posts the exact items, fees, payable total, saved delivery label and a Z-number.
 Any registered member still in that group can type “inkling, yes Z1” in a later message within five
@@ -41,8 +41,9 @@ cart ID; verify their correspondence from the actual saved address and cart, rat
 stripping IDs in requests. Tokens refresh through the SDK. Reconnection is an administrator operation.
 
 The runtime rejects changed tool schemas on connection, changed delivery details, unavailable stock,
-quantity overruns, multiple stores and carts not previously written by this household flow. Human
-selection of an actual P-number prevents silent substitutions. Settings and OAuth data never appear
+quantity overruns, multiple stores and carts not previously written by this household flow. Products must come from actual current search options. The assistant may select the closest match
+for a human shopping request, showing its brand, pack and unit price and disclosing substitutions.
+Product selection only edits the basket; it never replaces the separate bill approval. Settings and OAuth data never appear
 in group messages or model input. Only the address label appears in previews.
 
 ## Approval, budget and recovery

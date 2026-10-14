@@ -45,19 +45,18 @@ export class HouseholdCheckout {
   const catalog=readSealedJson<Catalog>(file('household-catalog'),{next:1,items:[]});catalog.items=catalog.items.filter(i=>this.now()-i.at<15*60_000).slice(-100);
   const results=found.map(product=>{const item={ref:'P'+catalog.next++,at:this.now(),product};catalog.items.push(item);return item;});
   writeSealedJson(file('household-catalog'),catalog);
-  return results.length?'Here are the options:\n'+results.map(i=>`${i.ref}: ${i.product.name} · ${i.product.pack} · ${formatMoney(i.product.price)} per pack`).join('\n')+'\n\nWhich pack would you like? Reply with its P-number. These are item prices; checkout fees come with the bill.':'I couldn’t find an available match on Instamart. Try a different brand or pack size.';
+  return results.length?'Here are the options:\n'+results.map(i=>`${i.ref}: ${i.product.name} · ${i.product.pack} · ${formatMoney(i.product.price)} per pack`).join('\n')+'\n\nYou can choose an option or ask me to pick the closest match. These are item prices; checkout fees come with the bill.':'I couldn’t find an available match on Instamart. Try a different brand or pack size.';
  });}
- select(user:string,group:string,item:number,ref:string,said:string){
+ select(user:string,group:string,item:number,ref:string){
   this.access(user,group);this.noPending(this.ledger());
-  // A model cannot silently choose a substitute. The human must identify the returned option.
-  if(!/^P[1-9]\d*$/i.test(ref))throw new Error('Please choose a P-number from the product options I showed you.');
-  if(!new RegExp(`\\b${ref}\\b`,'i').test(said))throw new Error(`Please reply “${ref.toUpperCase()} for B${item}” if that’s the pack you want. I haven’t selected it yet.`);
+  // Selecting a pack only edits a reviewable basket; purchase approval remains a separate code gate.
+  if(!/^P[1-9]\d*$/i.test(ref))throw new Error('I need a current product option before I can select that pack.');
   const c=readSealedJson<Catalog>(file('household-catalog'),{next:1,items:[]});const choice=c.items.find(i=>i.ref.toUpperCase()===ref.toUpperCase()&&this.now()-i.at<15*60_000);
   const basket=householdBasket(),line=basket.items.find(i=>i.id===item);
   if(!choice||!line)throw new Error('That product option or basket line expired. Search again.');
   if(line.quantity>choice.product.maxQuantity)throw new Error('Requested quantity exceeds this product limit.');
   line.product=choice.product;basket.revision++;saveHouseholdBasket(basket);
-  return `Saved ${line.quantity} × ${choice.product.name} (${choice.product.pack}) in your basket, B${line.id}.`;
+  return `Saved ${line.quantity} × ${choice.product.name} (${choice.product.pack}) · ${formatMoney(choice.product.price)} each, in your basket (B${line.id}, ${choice.ref}).`;
  }
  async preview(user:string,group:string,method:'cod'|'gpay',source:string){return this.locked(async()=>{
   this.access(user,group);const s=this.settings();if(!s.checkoutEnabled)throw new Error('Checkout is not enabled for this installation.');

@@ -69,8 +69,8 @@ export const householdShoppingTools=[
 ];
 
 export const liveHouseholdTools=[
- fn('household_shop_search','Search live Instamart products for the configured household Flat address. Returns P-numbers. Ask the person to pick the exact P-number before selecting a basket product.',{query:{type:'string'}}),
- fn('household_basket_select','Resolve one existing basket B-number to a product P-number explicitly selected in the human message. Never silently choose substitutes.',{item:{type:'integer',minimum:1},product:{type:'string'}}),
+ fn('household_shop_search','Search live Instamart products for the configured household Flat address. Returns live P-numbers. Use these to select the closest requested product yourself; ask a question only for a meaningful ambiguity.',{query:{type:'string'}}),
+ fn('household_basket_select','Choose a live product P-number for an existing basket B-number. You may pick the closest match to the human request without requiring typed P-numbers. Preserve requested brand, size/count and quantity; disclose any substitution. This only edits the basket; final purchase still needs a later bill approval.',{item:{type:'integer',minimum:1},product:{type:'string'}}),
  fn('household_checkout_preview','Build the selected household basket in Instamart and send its exact bill for a later numbered group approval. This does not place an order. Never use the browser for checkout.',{payment:{type:'string',enum:['cod','gpay']}}),
  fn('household_order_status','Show the last recorded state of household orders only. No access to the account holder’s personal order history.',{})
 ];

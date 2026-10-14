@@ -9,8 +9,10 @@ export function shoppingResultReply(results: ToolResult[]): string | undefined {
   const shopping = results.filter(r => r.name.startsWith('household_'));
   if (!shopping.length) return undefined;
   // Keep the latest basket snapshot instead of repeating stale intermediate quantities.
+  const selectedRefs=new Set(shopping.filter(r=>r.name==='household_basket_select'&&/^Saved /.test(r.output)).flatMap(r=>r.output.match(/\bP[1-9]\d*\b/g)??[]));
   const lastBasket = shopping.findLastIndex(r => /^household_basket_(?:show|update)$/.test(r.name));
   return [...new Set(shopping.filter((r,i) => !/^household_basket_(?:show|update)$/.test(r.name) || i === lastBasket)
+    .filter(r=>r.name!=='household_shop_search'||![...selectedRefs].some(ref=>new RegExp(`\\b${ref}\\b`).test(r.output)))
     .map(r => r.output.trim()).filter(Boolean))].join('\n\n') || undefined;
 }
 
