@@ -10,7 +10,8 @@
     "music:service": "tsx src/music-daemon.ts",
     "music": "tsx src/music-cli.ts",
     "reading:worker": "tsx src/reading-worker.ts",
-    "zepto:setup": "tsx src/zepto-setup.ts"
+    "zepto:setup": "tsx src/zepto-setup.ts",
+    "instamart:setup": "tsx src/shopping-setup.ts instamart"
   },
   "type": "module",
   "private": true,

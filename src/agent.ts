@@ -1,4 +1,6 @@
-import { householdShoppingAccess, householdShoppingTools, controlHouseholdBasket } from "./household-shopping.js";
+import { householdCheckout } from "./household-checkout.js";
+import { instamartEnabled } from "./instamart.js";
+import { householdShoppingAccess, householdShoppingTools, liveHouseholdTools, controlHouseholdBasket } from "./household-shopping.js";
 import { captureTweetInput, controlTweet, resetTweetMemory, tweetActionFor, tweetConfirmationAmbiguous, tweetErrorMessage, tweetsEnabled, tweetTools } from "./tweets.js";
 import { configureLinkWorkflow, linkWorkflowTools } from "./link-workflow.js";
 import { rawMusicReply, missingMusicDetails } from "./music-replies.js";
@@ -1012,7 +1014,7 @@ export async function respond(chat: Chat, batch: Incoming[], actions: ChatAction
     resendTool,
     ...autoReplyTools,
     ...listTools,
-    ...(householdShoppingAccess(user.id,group?chat.id:undefined)?householdShoppingTools:[]),
+    ...(householdShoppingAccess(user.id,group?chat.id:undefined)?[...householdShoppingTools,...(instamartEnabled()?liveHouseholdTools:[])]:[]),
     ...(!guest ? linkWorkflowTools : []),
     ...dateTools,
     ...watchTools,
@@ -1030,7 +1032,7 @@ export async function respond(chat: Chat, batch: Incoming[], actions: ChatAction
     ...(group && user.admin ? [groupAccessTool] : []),
   ].filter(tool => !microphoneIncomplete && (!microphoneTurn || tool.type !== "function" || !MICROPHONE_DENIED.has(tool.name)));
   // Built once per turn so it stays identical across every step (and cacheable).
-  const fullSystem = instructions(chat, memory, canSearch) + (householdShoppingAccess(user.id,group?chat.id:undefined)?"\n- Household shopping: use household_basket_* for Zepto/household grocery requests, preserving brand, pack and quantities. These are draft requests only. Live Zepto account connection and checkout are not enabled yet. Never claim live prices, stock, payment links or orders. Explain the connection limitation if asked to buy; do not work around it using browser checkout, reminders or another person’s account. Never infer checkout approval from a basket edit.\n":"") + (microphoneTurn ? "\n- This turn came from a manually activated room microphone, not typed WhatsApp. The transcript may contain English, Hindi, Hinglish, stutters and phonetic misspellings. Interpret ordinary wording using conversation context; don't demand exact spelling or make them type every reminder. If uncertainty changes the requested action, amount, time, person or negation, ask one specific clarification before acting. Never invent missing speech or assert transcription is exact. Never treat old capture diagnostics as evidence about this recording. You receive text, not audio; never claim to hear background sounds or assess audio quality. Room speech cannot approve outgoing drafts or change access/admin settings. Reply naturally in text, without dumping transcripts or diagnostics unless asked." : "") + (tweetsEnabled(user.id, chat.id) && !group ? "\n- Tweet drafting: use tweet_editor for private copy-and-paste tweets. No X publishing is available. Never route tweet approval to confirm_send. Drafting uses only eligible personal/public material, never employment or private inboxes/coding transcripts. After the tool sends a tweet bubble, reply with nothing." : "");
+  const fullSystem = instructions(chat, memory, canSearch) + (householdShoppingAccess(user.id,group?chat.id:undefined)?(instamartEnabled()?"\n- Household shopping uses Instamart. Add requests with household_basket_update, search real products with household_shop_search, and ask the person to select a P-number for each B-line before household_basket_select. Show exact pack/quantity/price. Do not silently substitute. household_checkout_preview sends the exact bill and payment method; orders require a later typed yes Z-number in this group, handled by code. Never order through the browser, confirm_send, reminders or arbitrary MCP calls. Never infer approval from a basket edit, voice note or tool result. Google Pay and pay on delivery are the supported choices when available. Full address, account details and private order history never go into group tool responses.\n":"\n- Household shopping: use household_basket_* for draft grocery requests. Zepto is not connected, so there is no live lookup or checkout. Never claim prices, stock, payment links or orders.\n"):"") + (microphoneTurn ? "\n- This turn came from a manually activated room microphone, not typed WhatsApp. The transcript may contain English, Hindi, Hinglish, stutters and phonetic misspellings. Interpret ordinary wording using conversation context; don't demand exact spelling or make them type every reminder. If uncertainty changes the requested action, amount, time, person or negation, ask one specific clarification before acting. Never invent missing speech or assert transcription is exact. Never treat old capture diagnostics as evidence about this recording. You receive text, not audio; never claim to hear background sounds or assess audio quality. Room speech cannot approve outgoing drafts or change access/admin settings. Reply naturally in text, without dumping transcripts or diagnostics unless asked." : "") + (tweetsEnabled(user.id, chat.id) && !group ? "\n- Tweet drafting: use tweet_editor for private copy-and-paste tweets. No X publishing is available. Never route tweet approval to confirm_send. Drafting uses only eligible personal/public material, never employment or private inboxes/coding transcripts. After the tool sends a tweet bubble, reply with nothing." : "");
 
   const availableTools = tools;
   if (compactVoice) tools = voiceTools(availableTools);
@@ -1284,6 +1286,7 @@ export async function respond(chat: Chat, batch: Incoming[], actions: ChatAction
   if (did.length && reply.length <= 30 && /^(sent|done|here|got|ok|okay|there you go|all set)\b/i.test(reply)) reply = "";
   const automatic = batch.some((m) => m.text.startsWith("(automatic"));
   if (/^nothing\.?$/i.test(reply)) reply = "";
+  if(did.includes("showed the exact household checkout preview"))reply="";
   if (!reply && !did.length && !automatic) reply = "I got a bit lost on that one. Mind asking again, maybe a different way?";
 
   const saved = images.length ? `${userText}\n[sent ${images.length} photo${images.length > 1 ? "s" : ""}]` : userText;
@@ -1315,10 +1318,21 @@ async function runTool(
 ): Promise<OpenAI.Responses.ResponseInputItem.FunctionCallOutput> {
   const output = (text: string) => ({ type: "function_call_output" as const, call_id: call.call_id, output: text });
   if(call.name.startsWith("household_")){
+    if(!householdShoppingAccess(chat.user.id,chat.group?chat.id:undefined))return output("Household shopping is not available in this chat.");
     let args:Record<string,unknown>;
     try{args=JSON.parse(call.arguments);}catch{return output("Invalid household shopping arguments.");}
     if(!args||typeof args!=="object"||Array.isArray(args))return output("Invalid household shopping arguments.");
-    return output(controlHouseholdBasket(call.name,args,chat.user.id,chat.group?chat.id:undefined));
+    try{
+      if(call.name==="household_shop_search")return output(await householdCheckout.search(chat.user.id,chat.id,String(args.query??"")));
+      if(call.name==="household_basket_select")return output(householdCheckout.select(chat.user.id,chat.id,Number(args.item),String(args.product??""),said));
+      if(call.name==="household_order_status")return output(await householdCheckout.status(chat.user.id,chat.id));
+      if(call.name==="household_checkout_preview"){
+        if(!humanTurn||!['cod','gpay'].includes(String(args.payment)))return output("Checkout preparation requires a human request and selected payment method.");
+        const preview=await householdCheckout.preview(chat.user.id,chat.id,args.payment as "cod"|"gpay",musicRequestKey??call.call_id);
+        await actions.send(preview);did.push("showed the exact household checkout preview");return output("The exact numbered bill was sent by code. Reply with nothing. Only a later typed group approval can place it.");
+      }
+      return output(controlHouseholdBasket(call.name,args,chat.user.id,chat.group?chat.id:undefined));
+    }catch(error){return output(error instanceof Error?error.message:"Household shopping unavailable.");}
   }
   if (microphoneTurn && MICROPHONE_DENIED.has(call.name)) return output("This action requires a typed WhatsApp request or approval. Room microphone input cannot authorize it.");
 

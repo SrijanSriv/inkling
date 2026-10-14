@@ -39,6 +39,8 @@ export type InboundMessage = Incoming & {
   key: WAMessageKey;
   /** Distinguishes actual text from media captions for opt-in bare-link rules. */
   plainText?: boolean;
+  typedText?: string;
+  forwarded?: boolean;
   /** Set for group chats. Normally answered when addressed; an enabled bare-link rule is a narrow exception. */
   group?: { addressed: boolean };
 };
@@ -275,6 +277,8 @@ async function parse(socket: WASocket, m: WAMessage): Promise<InboundMessage | u
     phone,
     senderName,
     plainText,
+    typedText:plainText?text:undefined,
+    forwarded:!!ctx?.isForwarded||!!ctx?.forwardingScore,
     group,
     key: m.key,
     at: new Date(Number(m.messageTimestamp ?? Date.now() / 1000) * 1000),

@@ -1,3 +1,5 @@
+import { householdCheckout, shoppingApprovalCandidate } from "./household-checkout.js";
+import { instamartEnabled } from "./instamart.js";
 import { householdShoppingAccess, householdShopStatus, controlHouseholdBasket } from "./household-shopping.js";
 import { resetTweetMemory, startTweetEditor, tweetsEnabled } from "./tweets.js";
 import { linkWorkflowCandidate, reserveLink, runLinkWorkflow } from "./link-workflow.js";
@@ -202,8 +204,8 @@ async function drain(key: string, queue: { busy: boolean; pending: Queued[] }): 
       finally { startedPending([msg]); }
       continue;
     }
-    const boundary = queue.pending.findIndex(item => item.workflow || item.msg.audioError || item.msg.source === "microphone");
-    const batch = queue.pending.splice(0, first.msg.source === "microphone" ? 1 : boundary < 0 ? queue.pending.length : boundary);
+    const boundary = queue.pending.findIndex(item => item.workflow || item.msg.audioError || item.msg.source === "microphone" || shoppingApprovalCandidate(item.msg.typedText??item.msg.text));
+    const batch = queue.pending.splice(0, first.msg.source === "microphone" || shoppingApprovalCandidate(first.msg.typedText??first.msg.text) ? 1 : boundary < 0 ? queue.pending.length : boundary);
     startedPending(batch.map((b) => b.msg));
     const { msg: last, user } = batch.at(-1)!;
     const { chatJid } = last;
@@ -217,6 +219,23 @@ async function drain(key: string, queue: { busy: boolean; pending: Queued[] }): 
       batch.length === 1
         ? last.text.replace(new RegExp(`^\\s*(@\\S+|${nameCall().source})[\\s,:]*`, "i"), "").trim().toLowerCase().replace(/\s+/g, " ")
         : "";
+    const shoppingWords=(last.typedText??last.text).replace(new RegExp(`^\\s*(@\\S+|${nameCall().source})[\\s,:]*`,"i"),"").trim();
+    if(batch.length===1&&shoppingApprovalCandidate(shoppingWords)&&instamartEnabled()){
+      try{
+        const result=await householdCheckout.approve(user.id,key,shoppingWords,{plain:last.plainText===true,forwarded:last.forwarded===true,audio:!!last.audioOrigin||last.source==="microphone",at:last.at.getTime(),id:last.key.id??"",allowed:async()=>{
+          const current=getUsers().find(u=>u.id===user.id);if(!last.group||!current)return false;
+          const info=await groupInfo(chatJid,true);return phonesOf(current).some(p=>info.phones.includes(p));
+        }});
+        await sendReply(chatJid,result.text);
+        if(result.privateText){const current=getUsers().find(u=>u.id===user.id);if(current)await sendText(`${current.phone}@s.whatsapp.net`,result.privateText);}
+      }catch(error){await sendReply(chatJid,error instanceof Error?error.message:"Household checkout unavailable.");}
+      continue;
+    }
+    if(batch.length===1&&/^\/shopping resolve Z[1-9]\d* not-placed$/i.test(shoppingWords)&&instamartEnabled()){
+      try{if(last.plainText!==true||last.forwarded||last.audioOrigin||last.source==="microphone")throw new Error("Reconciliation requires the account holder’s typed message after checking Swiggy.");await sendReply(chatJid,await householdCheckout.reconcile(user.id,key,shoppingWords.split(/\s+/)[2]));}
+      catch(error){await sendReply(chatJid,error instanceof Error?error.message:"Checkout reconciliation unavailable.");}
+      continue;
+    }
     const answer = last.source === "microphone" ? undefined : await runCommand(chat, chatJid, command);
     if (answer !== undefined) {
       if (answer) await sendText(chatJid, answer);
@@ -367,7 +386,7 @@ const runJob: RunJob = async (target, prompt) => {
 /** Commands are handled here, never by the model, so sign-in links and account changes don't go through the model. */
 async function runCommand(chat: Chat, chatJid: string, command: string): Promise<string | undefined> {
   const { user, group } = chat;
-  if(command==="/zepto"||command==="/zepto basket"){
+  if(/^\/(?:zepto|shopping|instamart)(?: basket)?$/.test(command)){
     if(!householdShoppingAccess(user.id,group?chat.id:undefined))return "Household shopping is available only to registered people in the configured household group.";
     return command.endsWith(" basket")?controlHouseholdBasket("household_basket_show",{},user.id,chat.id):householdShopStatus();
   }
@@ -635,3 +654,16 @@ await startWhatsApp(onMessage, () => {
     log.warn({ err }, "couldn't send the startup message"),
   );
 });
+
+// This custom WhatsApp client does not mount Swiggy's payment widget: poll only its own approved UPI checkout.
+let shoppingPolling=false;
+if(instamartEnabled()){
+ const timer=setInterval(()=>{if(shoppingPolling||!link.connected||handingOver)return;shoppingPolling=true;
+  void householdCheckout.poll().then(async updates=>{
+   for(const update of updates){
+    if(update.group!==config.zeptoGroupId)continue;
+    await sendText(`${update.group.slice("group-".length)}@g.us`,update.text,`INKSHOP${update.id}${Date.now()}`);
+   }
+  }).catch(()=>log.warn("household payment status unavailable")).finally(()=>{shoppingPolling=false;});
+ },10000);timer.unref();
+}

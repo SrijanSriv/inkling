@@ -88,6 +88,7 @@ export const config = {
   codingUrl: (process.env.INKLING_CODING_URL ?? "").replace(/\/$/, "") || undefined,
   codingSecret: process.env.INKLING_CODING_SECRET || undefined,
   // Household shopping is separate from personal inboxes and is off until explicitly configured.
+  shoppingProvider: process.env.INKLING_SHOPPING_PROVIDER === "instamart" ? "instamart" : undefined,
   zeptoEnabled: process.env.INKLING_ZEPTO_ENABLED === "true",
   zeptoGroupId: process.env.INKLING_ZEPTO_GROUP_ID || undefined,
   zeptoAccountUserId: process.env.INKLING_ZEPTO_ACCOUNT_USER_ID || undefined,
