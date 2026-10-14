@@ -1,6 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 
 const FRAME = 3200; // 100 ms, 16 kHz mono signed PCM16.
+// A missing receiver must stop capture, never switch to another mic (including a Bluetooth speaker).
+export const MICROPHONE_PROPERTIES = "node.dont-fallback=true node.dont-move=true node.dont-reconnect=true";
 export type SwitchState = "waiting-for-mute" | "armed" | "recording" | "blocked";
 export type PiMicrophoneInput = { ready: boolean; drain?(): Buffer; close(): void };
 
@@ -50,7 +52,7 @@ export class WarmMicrophoneInput {
   }
   private open(): void {
     if (this.stopped) return;
-    const child=spawn("pw-record",["--raw","--target",this.source,"--rate","16000","--channels","1","--format","s16","-"],{stdio:"pipe"});
+    const child=spawn("pw-record",["--raw","--target",this.source,"--properties",MICROPHONE_PROPERTIES,"--rate","16000","--channels","1","--format","s16","-"],{stdio:"pipe"});
     this.process=child;
     let last=Date.now(), failed=false;
     const lost=()=>{

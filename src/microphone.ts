@@ -11,7 +11,7 @@ import { log } from "./log.js";
 import { reviewMicrophone } from "./microphone-review.js";
 import { MicrophoneStream } from "./microphone-stream.js";
 import { transcribeMicrophone } from "./microphone-transcription.js";
-import { WarmMicrophoneInput, MicrophoneMuteGate, type SwitchState, type PiMicrophoneInput } from "./microphone-input.js";
+import { WarmMicrophoneInput, MicrophoneMuteGate, MICROPHONE_PROPERTIES, type SwitchState, type PiMicrophoneInput } from "./microphone-input.js";
 import { chatFile } from "./store.js";
 import { readSealedJson, writeSealedJson } from "./vault.js";
 
@@ -272,7 +272,7 @@ export class Microphone {
     this.clearRecording();
     if(this.input&&!device&&!this.input.ready)throw new Error("The Pi microphone is reconnecting. Wait a moment and retry.");
     if(this.input&&!device&&!physical)this.input.drain?.().fill(0); // No pre-button audio from a previous person.
-    const recorder = device || this.input ? undefined : this.deps.record?.() ?? spawn("pw-record", ["--raw", "--target", config.micSource!, "--rate", String(RATE), "--channels", "1", "--format", "s16", "-"], { stdio: "pipe" });
+    const recorder = device || this.input ? undefined : this.deps.record?.() ?? spawn("pw-record", ["--raw", "--target", config.micSource!, "--properties", MICROPHONE_PROPERTIES, "--rate", String(RATE), "--channels", "1", "--format", "s16", "-"], { stdio: "pipe" });
     const job = { id: randomUUID(), owner, recorder, device, physical, chunks: [], bytes: 0, samples: 0, sum: 0, energy: 0, clipped: 0,
       start: Date.now(), lastFrame: Date.now(), closing: false, cancelled: false, abort: new AbortController(),
       holdUntil: held ? Date.now() + 3000 : undefined } as unknown as Job;
