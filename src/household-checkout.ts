@@ -41,27 +41,28 @@ export class HouseholdCheckout {
  private noPending(l:Ledger){if(l.orders.some(pending))throw new Error('An order or payment is still unsettled. Check its status before preparing another checkout.');}
  async search(user:string,group:string,query:string){return this.locked(async()=>{
   this.access(user,group);if(!query.trim()||query.length>160)throw new Error('Give a short product search.');
-  const found=productsFrom(await this.call('search_products',{addressId:this.settings().addressId,query:query.trim()}));
+  const found=productsFrom(await this.call('search_products',{addressId:this.settings().addressId,query:query.trim()})).slice(0,5);
   const catalog=readSealedJson<Catalog>(file('household-catalog'),{next:1,items:[]});catalog.items=catalog.items.filter(i=>this.now()-i.at<15*60_000).slice(-100);
   const results=found.map(product=>{const item={ref:'P'+catalog.next++,at:this.now(),product};catalog.items.push(item);return item;});
   writeSealedJson(file('household-catalog'),catalog);
-  return results.length?results.map(i=>`${i.ref}: ${i.product.name} · ${i.product.pack} · ${formatMoney(i.product.price)} per pack`).join('\n')+'\nLive search results, not a final bill. Choose a specific pack before selecting it for a basket line.':'Instamart returned no available matches. This is not proof that the item is unavailable everywhere.';
+  return results.length?'Here are the options:\n'+results.map(i=>`${i.ref}: ${i.product.name} · ${i.product.pack} · ${formatMoney(i.product.price)} per pack`).join('\n')+'\n\nWhich pack would you like? Reply with its P-number. These are item prices; checkout fees come with the bill.':'I couldn’t find an available match on Instamart. Try a different brand or pack size.';
  });}
  select(user:string,group:string,item:number,ref:string,said:string){
   this.access(user,group);this.noPending(this.ledger());
   // A model cannot silently choose a substitute. The human must identify the returned option.
-  if(!new RegExp(`\\b${ref.replace(/[^a-z0-9]/gi,'')}\\b`,'i').test(said))throw new Error('Ask which P-number they want; their own message must identify the product option.');
+  if(!/^P[1-9]\d*$/i.test(ref))throw new Error('Please choose a P-number from the product options I showed you.');
+  if(!new RegExp(`\\b${ref}\\b`,'i').test(said))throw new Error(`Please reply “${ref.toUpperCase()} for B${item}” if that’s the pack you want. I haven’t selected it yet.`);
   const c=readSealedJson<Catalog>(file('household-catalog'),{next:1,items:[]});const choice=c.items.find(i=>i.ref.toUpperCase()===ref.toUpperCase()&&this.now()-i.at<15*60_000);
   const basket=householdBasket(),line=basket.items.find(i=>i.id===item);
   if(!choice||!line)throw new Error('That product option or basket line expired. Search again.');
   if(line.quantity>choice.product.maxQuantity)throw new Error('Requested quantity exceeds this product limit.');
   line.product=choice.product;basket.revision++;saveHouseholdBasket(basket);
-  return `Selected ${choice.ref}: ${choice.product.name} (${choice.product.pack}) for B${line.id}, quantity ${line.quantity}. No order placed.`;
+  return `Saved ${line.quantity} × ${choice.product.name} (${choice.product.pack}) in your basket, B${line.id}.`;
  }
  async preview(user:string,group:string,method:'cod'|'gpay',source:string){return this.locked(async()=>{
   this.access(user,group);const s=this.settings();if(!s.checkoutEnabled)throw new Error('Checkout is not enabled for this installation.');
   const l=this.ledger();this.noPending(l);const basket=householdBasket();
-  if(!basket.items.length||basket.items.some(i=>!i.product))throw new Error('Every basket line needs a selected live product before checkout. Search and choose the P-number first.');
+  if(!basket.items.length||basket.items.some(i=>!i.product))throw new Error(basket.items.length?`I can’t get the bill yet. These requests still need a specific pack: ${basket.items.filter(i=>!i.product).map(i=>`B${i.id}: ${i.request}`).join('; ')}. Choose from the product options first.`:'Your basket is empty. Tell me what you’d like to add.');
   const current=cartFrom(await this.call('get_cart',{}),s.addressId,s.cartAddressHash,s.cartAddressId);
   if(current.items.length&&current.identity!==l.ownedCart)throw new Error('The Swiggy cart contains items outside this household basket, or changed in the app. Review/clear it in Swiggy before replacing it. Nothing was overwritten.');
   const items=basket.items.map(i=>({spinId:i.product!.spinId,skuId:i.product!.skuId,quantity:i.quantity}));
@@ -117,8 +118,9 @@ export class HouseholdCheckout {
  });}
  private clearApproved(o:Order){const basket=householdBasket();if(basket.revision===o.revision){basket.items=[];basket.revision++;saveHouseholdBasket(basket);}}
  async status(user:string,group:string){return this.locked(async()=>{
-  this.access(user,group);const l=this.ledger(),orders=l.orders.slice(-5);if(!orders.length)return 'No household orders have been submitted.';
-  return orders.map(o=>`${o.id}: ${o.state.replaceAll('_',' ')} · ${formatMoney(o.amount)}${o.orderId?' · order '+o.orderId:''}`).join('\n');
+  this.access(user,group);const l=this.ledger(),orders=l.orders.slice(-5);if(!orders.length)return 'No household order has been placed through me, and there’s no payment waiting.';
+  const labels:Record<State,string>={awaiting:'bill ready, waiting for your approval',expired:'bill expired or cancelled; not submitted',submitting:'submission needs checking in Swiggy; don’t retry',unknown:'result uncertain; check Swiggy before retrying',payment_pending:'waiting for payment through the private payment link',placed:'order confirmed',failed:'checked and marked not placed'};
+  return orders.map(o=>`${o.id}: ${labels[o.state]} · ${formatMoney(o.amount)}${o.orderId?' · order '+o.orderId:''}`).join('\n');
  });}
  async poll():Promise<{id:string;group:string;actor?:string;text:string}[]>{return this.locked(async()=>{
   if(!instamartEnabled()||!config.zeptoGroupId||!getUsers().some(u=>u.id===config.zeptoAccountUserId))return [];

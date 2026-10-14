@@ -1,4 +1,4 @@
-import { shoppingReplyNeedsEvidence, shoppingResultReply } from "./shopping-replies.js";
+import { shoppingReplyNeedsEvidence, shoppingResultReply, shoppingErrorReply } from "./shopping-replies.js";
 import { householdCheckout } from "./household-checkout.js";
 import { instamartEnabled } from "./instamart.js";
 import { householdShoppingAccess, householdShoppingTools, liveHouseholdTools, controlHouseholdBasket } from "./household-shopping.js";
@@ -1293,7 +1293,7 @@ export async function respond(chat: Chat, batch: Incoming[], actions: ChatAction
   const shoppingResults=shoppingResultReply(toolResults);
   if(shoppingResults!==undefined)reply=toWhatsApp(shoppingResults);
   else if(instamartEnabled()&&householdShoppingAccess(user.id,group?chat.id:undefined)&&(shoppingReplyNeedsEvidence(reply)||shoppingReplyNeedsEvidence(messages))&&!did.includes("showed the exact household checkout preview")){
-    reply=toWhatsApp(`${await householdCheckout.status(user.id,chat.id)}\n\n${controlHouseholdBasket("household_basket_show",{},user.id,chat.id)}\n\nI couldn't verify the requested shopping action. A purchase needs a real numbered checkout preview and your later typed approval. Google Pay uses the provider payment link sent privately to the approver; don't expect an automatic collect request.`);
+    reply=toWhatsApp(`I couldn’t confirm that request. Here’s what’s actually saved:\n\n${controlHouseholdBasket("household_basket_show",{},user.id,chat.id)}\n\n${await householdCheckout.status(user.id,chat.id)}\n\nFor Google Pay, I’ll send a payment link privately after you approve the final bill.`);
   }
   if(did.includes("showed the exact household checkout preview"))reply="";
   if (!reply && !did.length && !automatic) reply = "I got a bit lost on that one. Mind asking again, maybe a different way?";
@@ -1341,7 +1341,7 @@ async function runTool(
         await actions.send(preview);did.push("showed the exact household checkout preview");return output("The exact numbered bill was sent by code. Reply with nothing. Only a later typed group approval can place it.");
       }
       return output(controlHouseholdBasket(call.name,args,chat.user.id,chat.group?chat.id:undefined));
-    }catch(error){return output(error instanceof Error?error.message:"Household shopping unavailable.");}
+    }catch(error){return output(shoppingErrorReply(error));}
   }
   if (microphoneTurn && MICROPHONE_DENIED.has(call.name)) return output("This action requires a typed WhatsApp request or approval. Room microphone input cannot authorize it.");
 

@@ -22,7 +22,13 @@ export function householdShopStatus(){
  return `Household shopping basket: on. Limits: ${money(config.zeptoOrderLimit)} per order, ${money(config.zeptoDailyLimit)} per day. Registered household members may prepare the basket and, once checkout is enabled, approve an exact numbered checkout in this group.\nLive Zepto shopping is not enabled: account connection and checkout tool verification are still required. Nothing can be ordered or charged through this feature yet.`;
 }
 export function showHouseholdBasket(basket:Basket){
- return `Household basket${basket.items.length?'\n'+basket.items.map(i=>`B${i.id}: ${i.quantity} × ${i.product?i.product.name+" ("+i.product.pack+")":i.request+" [product selection pending]"}`).join('\n'):': empty.'}\n${instamartEnabled()?"Selected packs come from live Instamart search; stock, fees and total are rechecked before checkout.":"Draft requests only: products, pack sizes, stock, prices and the payable total have not been checked with Zepto."} No order placed.`;
+ if(!basket.items.length)return 'Your household basket is empty. Tell me what you need.';
+ const ready=basket.items.filter(i=>i.product),pending=basket.items.filter(i=>!i.product);
+ const sections:string[]=[];
+ if(ready.length)sections.push('In your basket:\n'+ready.map(i=>`${i.quantity} × ${i.product!.name} (${i.product!.pack}) · B${i.id}`).join('\n'));
+ if(pending.length)sections.push('Still need a pack choice:\n'+pending.map(i=>`${i.quantity} × ${i.request.replace(/^P\d+:\s*/i,'')} · B${i.id}`).join('\n'));
+ sections.push(pending.length?'I need to match those requests to specific packs before I can get your bill. Choose from the product options I show you.':'The packs are selected. Ask for a bill with Google Pay or pay on delivery; I’ll check stock, fees and the total.');
+ return sections.join('\n\n');
 }
 export function controlHouseholdBasket(name:string,args:Record<string,unknown>,user:string,group?:string):string{
  if(!householdShoppingAccess(user,group))return 'Household shopping is available only to registered people in the configured household group.';
@@ -56,7 +62,7 @@ export function controlHouseholdBasket(name:string,args:Record<string,unknown>,u
 const fn=(name:string,description:string,properties:Record<string,unknown>):OpenAI.Responses.FunctionTool=>({type:'function',name,description,strict:true,parameters:{type:'object',properties,required:Object.keys(properties),additionalProperties:false}});
 export const householdShoppingTools=[
  fn('household_shop_status','Read household shopping setup and limits. No purchase is made.',{}),
- fn('household_basket_show','Show the household shopping basket. Draft requests, not a live Zepto bill.',{}),
+ fn('household_basket_show','Show saved household requests and selected packs. This is not a final payable bill.',{}),
  fn('household_basket_update','Add an explicitly requested item to the shared household basket, set an existing line quantity, remove a line or clear it when asked. This cannot order anything. Use null for unused fields. Preserve brand/pack details from the request.',{
   action:{type:'string',enum:['add','set_quantity','remove','clear']},request:{type:['string','null']},item:{type:['integer','null'],description:'Existing B-number, e.g. 2 for B2.'},quantity:{type:['integer','null'],minimum:1,maximum:100}
  })

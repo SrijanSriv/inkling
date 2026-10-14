@@ -1,3 +1,4 @@
+import { shoppingErrorReply } from "./shopping-replies.js";
 import { householdCheckout, shoppingApprovalCandidate } from "./household-checkout.js";
 import { instamartEnabled } from "./instamart.js";
 import { householdShoppingAccess, householdShopStatus, controlHouseholdBasket } from "./household-shopping.js";
@@ -228,12 +229,12 @@ async function drain(key: string, queue: { busy: boolean; pending: Queued[] }): 
         }});
         await sendReply(chatJid,result.text);
         if(result.privateText){const current=getUsers().find(u=>u.id===user.id);if(current)await sendText(`${current.phone}@s.whatsapp.net`,result.privateText);}
-      }catch(error){await sendReply(chatJid,error instanceof Error?error.message:"Household checkout unavailable.");}
+      }catch(error){await sendReply(chatJid,shoppingErrorReply(error));}
       continue;
     }
     if(batch.length===1&&/^\/shopping resolve Z[1-9]\d* not-placed$/i.test(shoppingWords)&&instamartEnabled()){
       try{if(last.plainText!==true||last.forwarded||last.audioOrigin||last.source==="microphone")throw new Error("Reconciliation requires the account holder’s typed message after checking Swiggy.");await sendReply(chatJid,await householdCheckout.reconcile(user.id,key,shoppingWords.split(/\s+/)[2]));}
-      catch(error){await sendReply(chatJid,error instanceof Error?error.message:"Checkout reconciliation unavailable.");}
+      catch(error){await sendReply(chatJid,shoppingErrorReply(error));}
       continue;
     }
     const answer = last.source === "microphone" ? undefined : await runCommand(chat, chatJid, command);
