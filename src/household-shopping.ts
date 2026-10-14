@@ -22,7 +22,7 @@ export function householdShopStatus(){
  return `Household shopping basket: on. Limits: ${money(config.zeptoOrderLimit)} per order, ${money(config.zeptoDailyLimit)} per day. Registered household members may prepare the basket and, once checkout is enabled, approve an exact numbered checkout in this group.\nLive Zepto shopping is not enabled: account connection and checkout tool verification are still required. Nothing can be ordered or charged through this feature yet.`;
 }
 export function showHouseholdBasket(basket:Basket){
- return `Household basket${basket.items.length?'\n'+basket.items.map(i=>`B${i.id}: ${i.quantity} × ${i.product?i.product.name+" ("+i.product.pack+")":i.request}`).join('\n'):': empty.'}\n${instamartEnabled()?"Selected packs come from live Instamart search; stock, fees and total are rechecked before checkout.":"Draft requests only: products, pack sizes, stock, prices and the payable total have not been checked with Zepto."} No order placed.`;
+ return `Household basket${basket.items.length?'\n'+basket.items.map(i=>`B${i.id}: ${i.quantity} × ${i.product?i.product.name+" ("+i.product.pack+")":i.request+" [product selection pending]"}`).join('\n'):': empty.'}\n${instamartEnabled()?"Selected packs come from live Instamart search; stock, fees and total are rechecked before checkout.":"Draft requests only: products, pack sizes, stock, prices and the payable total have not been checked with Zepto."} No order placed.`;
 }
 export function controlHouseholdBasket(name:string,args:Record<string,unknown>,user:string,group?:string):string{
  if(!householdShoppingAccess(user,group))return 'Household shopping is available only to registered people in the configured household group.';

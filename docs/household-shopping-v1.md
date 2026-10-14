@@ -17,6 +17,8 @@ submit checkout. “inkling, cancel Z1” cancels an unsubmitted preview only.
 
 The approver receives the official Swiggy payment bridge privately. Google Pay is selected using the
 actual method returned by Swiggy; phone/browser handling still needs testing on the user's device.
+This is a payment-link handoff, not a GPay collect-request push. Shopping tool responses are delivered
+from code so an unrelated tool or old assistant claim cannot back an invented bill or order.
 We do not rewrite UPI transactions or expose payment links to everyone. COD is offered only when
 Swiggy lists it. Wallet spending is disabled.
 
