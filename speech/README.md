@@ -14,6 +14,13 @@ New unmute, source loss, disabling speech or a turn error cancel it too. It is n
 WhatsApp and does not claim understanding or tool success. The real answer and its timing logs are unchanged.
 Disable the flag and restart Ellie to remove this waiting cue; it does not accelerate transcription or reasoning.
 
+`INKLING_MIC_SPEECH_FILLER_FILE` optionally selects a trusted local 24 kHz mono PCM16 WAV, at most 2.5 seconds.
+It is validated and cached in RAM instead of calling the synthesizer. The bundled `assets/audio/curious-waiting.wav`
+is an optional English "hmmm… let's seeee" using the same cached voice as the measured deployment, with only
+the hum and final vowel stretched while preserving pitch. See its adjacent provenance note. Select it explicitly;
+other configured voices retain their existing generated acknowledgement. Attenuation, one-second timing,
+answer priority and cancellation are unchanged. Missing/invalid custom audio disables only the acknowledgement.
+
 ## Optional room speech output
 
 The gateway also supports `/synthesize` when `INKLING_TTS_UPSTREAM=http://127.0.0.1:8880` and

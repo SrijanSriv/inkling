@@ -1,6 +1,7 @@
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
+import { readFileSync, statSync } from "node:fs";
 import { config, getUsers } from "./config.js";
 import { chatFile } from "./store.js";
 import { readSealedJson, writeSealedJson } from "./vault.js";
@@ -250,7 +251,11 @@ export class RoomSpeech {
     this.fillerLoaded=true;
     let wav:Buffer|undefined;
     try {
-      wav=await (this.deps.synthesize??synthesizeSpeech)("Okay, let’s see.");const pcm=speechPcm(wav);
+      if(config.micSpeechFillerFile){
+        if(statSync(config.micSpeechFillerFile).size>160_000)throw new SpeechFailure("invalid_audio");
+        wav=readFileSync(config.micSpeechFillerFile);
+      } else wav=await (this.deps.synthesize??synthesizeSpeech)("Okay, let’s see.");
+      const pcm=speechPcm(wav);
       if(pcm.length>48000*2.5)throw new SpeechFailure("invalid_audio");
       this.filler=Buffer.from(pcm);
       for(let at=0;at<this.filler.length;at+=2)this.filler.writeInt16LE(Math.round(this.filler.readInt16LE(at)*.45),at);
