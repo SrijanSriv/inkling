@@ -24,6 +24,15 @@ captured clip, retained only in memory until one minute after decoding, capped a
 release. **Compare recognizers** runs the configured diagnostic on that same clip without changing the
 active model or acting on the results. See [the microphone design](docs/microphone-v1.md).
 
+Optional household shopping: `INKLING_ZEPTO_*` config enables an encrypted shared **draft basket** for
+registered members of one configured group. Ask to add/edit/show household groceries, or use
+`inkling /zepto basket` there. `/zepto` shows setup and limits. Draft requests have no verified stock,
+prices or total. Live Zepto search, checkout and payment links are not enabled yet; account connection
+and authenticated tool-contract verification are required first. The local OAuth helper is
+`npm run zepto:setup`; it stores setup credentials encrypted outside the repository and never places
+orders. See [the household integration plan](docs/zepto-household-v1-plan.md), including the planned
+single-use group approvals and Google Pay handoff. Existing private email/browser approvals are unchanged.
+
 A personal assistant that lives in WhatsApp, for you and a few friends. You text it the way you'd text a friend, on
 your own or in a group chat, and it texts back. Each person gets their own private conversation, memory and
 connected accounts.

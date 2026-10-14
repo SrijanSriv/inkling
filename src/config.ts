@@ -87,6 +87,12 @@ export const config = {
   // General coding jobs run on a separate laptop worker. Owner's private chat only.
   codingUrl: (process.env.INKLING_CODING_URL ?? "").replace(/\/$/, "") || undefined,
   codingSecret: process.env.INKLING_CODING_SECRET || undefined,
+  // Household shopping is separate from personal inboxes and is off until explicitly configured.
+  zeptoEnabled: process.env.INKLING_ZEPTO_ENABLED === "true",
+  zeptoGroupId: process.env.INKLING_ZEPTO_GROUP_ID || undefined,
+  zeptoAccountUserId: process.env.INKLING_ZEPTO_ACCOUNT_USER_ID || undefined,
+  zeptoOrderLimit: process.env.INKLING_ZEPTO_ORDER_LIMIT ? Number(process.env.INKLING_ZEPTO_ORDER_LIMIT) : undefined,
+  zeptoDailyLimit: process.env.INKLING_ZEPTO_DAILY_LIMIT ? Number(process.env.INKLING_ZEPTO_DAILY_LIMIT) : undefined,
   // Native music socket or custom player commands. Off until configured.
   musicSocket: process.env.INKLING_MUSIC_SOCKET || undefined,
   musicCommands: process.env.INKLING_MUSIC_COMMANDS || undefined,

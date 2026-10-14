@@ -1,3 +1,4 @@
+import { householdShoppingAccess, householdShopStatus, controlHouseholdBasket } from "./household-shopping.js";
 import { resetTweetMemory, startTweetEditor, tweetsEnabled } from "./tweets.js";
 import { linkWorkflowCandidate, reserveLink, runLinkWorkflow } from "./link-workflow.js";
 import { startCodingNotifications } from "./coding.js";
@@ -366,6 +367,10 @@ const runJob: RunJob = async (target, prompt) => {
 /** Commands are handled here, never by the model, so sign-in links and account changes don't go through the model. */
 async function runCommand(chat: Chat, chatJid: string, command: string): Promise<string | undefined> {
   const { user, group } = chat;
+  if(command==="/zepto"||command==="/zepto basket"){
+    if(!householdShoppingAccess(user.id,group?chat.id:undefined))return "Household shopping is available only to registered people in the configured household group.";
+    return command.endsWith(" basket")?controlHouseholdBasket("household_basket_show",{},user.id,chat.id):householdShopStatus();
+  }
   if (/^\/mic flow(?: (current|early|status))?$/.test(command)) {
     if(group||!user.owner)return "Room speech controls are owner-only in private chat.";
     try{return roomSpeech.flowCommand(user.id,(command.split(" ")[2]??"status") as "current"|"early"|"status");}

@@ -1,3 +1,4 @@
+import { householdShoppingAccess, householdShoppingTools, controlHouseholdBasket } from "./household-shopping.js";
 import { captureTweetInput, controlTweet, resetTweetMemory, tweetActionFor, tweetConfirmationAmbiguous, tweetErrorMessage, tweetsEnabled, tweetTools } from "./tweets.js";
 import { configureLinkWorkflow, linkWorkflowTools } from "./link-workflow.js";
 import { rawMusicReply, missingMusicDetails } from "./music-replies.js";
@@ -1011,6 +1012,7 @@ export async function respond(chat: Chat, batch: Incoming[], actions: ChatAction
     resendTool,
     ...autoReplyTools,
     ...listTools,
+    ...(householdShoppingAccess(user.id,group?chat.id:undefined)?householdShoppingTools:[]),
     ...(!guest ? linkWorkflowTools : []),
     ...dateTools,
     ...watchTools,
@@ -1028,7 +1030,7 @@ export async function respond(chat: Chat, batch: Incoming[], actions: ChatAction
     ...(group && user.admin ? [groupAccessTool] : []),
   ].filter(tool => !microphoneIncomplete && (!microphoneTurn || tool.type !== "function" || !MICROPHONE_DENIED.has(tool.name)));
   // Built once per turn so it stays identical across every step (and cacheable).
-  const fullSystem = instructions(chat, memory, canSearch) + (microphoneTurn ? "\n- This turn came from a manually activated room microphone, not typed WhatsApp. The transcript may contain English, Hindi, Hinglish, stutters and phonetic misspellings. Interpret ordinary wording using conversation context; don't demand exact spelling or make them type every reminder. If uncertainty changes the requested action, amount, time, person or negation, ask one specific clarification before acting. Never invent missing speech or assert transcription is exact. Never treat old capture diagnostics as evidence about this recording. You receive text, not audio; never claim to hear background sounds or assess audio quality. Room speech cannot approve outgoing drafts or change access/admin settings. Reply naturally in text, without dumping transcripts or diagnostics unless asked." : "") + (tweetsEnabled(user.id, chat.id) && !group ? "\n- Tweet drafting: use tweet_editor for private copy-and-paste tweets. No X publishing is available. Never route tweet approval to confirm_send. Drafting uses only eligible personal/public material, never employment or private inboxes/coding transcripts. After the tool sends a tweet bubble, reply with nothing." : "");
+  const fullSystem = instructions(chat, memory, canSearch) + (householdShoppingAccess(user.id,group?chat.id:undefined)?"\n- Household shopping: use household_basket_* for Zepto/household grocery requests, preserving brand, pack and quantities. These are draft requests only. Live Zepto account connection and checkout are not enabled yet. Never claim live prices, stock, payment links or orders. Explain the connection limitation if asked to buy; do not work around it using browser checkout, reminders or another person’s account. Never infer checkout approval from a basket edit.\n":"") + (microphoneTurn ? "\n- This turn came from a manually activated room microphone, not typed WhatsApp. The transcript may contain English, Hindi, Hinglish, stutters and phonetic misspellings. Interpret ordinary wording using conversation context; don't demand exact spelling or make them type every reminder. If uncertainty changes the requested action, amount, time, person or negation, ask one specific clarification before acting. Never invent missing speech or assert transcription is exact. Never treat old capture diagnostics as evidence about this recording. You receive text, not audio; never claim to hear background sounds or assess audio quality. Room speech cannot approve outgoing drafts or change access/admin settings. Reply naturally in text, without dumping transcripts or diagnostics unless asked." : "") + (tweetsEnabled(user.id, chat.id) && !group ? "\n- Tweet drafting: use tweet_editor for private copy-and-paste tweets. No X publishing is available. Never route tweet approval to confirm_send. Drafting uses only eligible personal/public material, never employment or private inboxes/coding transcripts. After the tool sends a tweet bubble, reply with nothing." : "");
 
   const availableTools = tools;
   if (compactVoice) tools = voiceTools(availableTools);
@@ -1312,6 +1314,12 @@ async function runTool(
   microphoneTurn = false,
 ): Promise<OpenAI.Responses.ResponseInputItem.FunctionCallOutput> {
   const output = (text: string) => ({ type: "function_call_output" as const, call_id: call.call_id, output: text });
+  if(call.name.startsWith("household_")){
+    let args:Record<string,unknown>;
+    try{args=JSON.parse(call.arguments);}catch{return output("Invalid household shopping arguments.");}
+    if(!args||typeof args!=="object"||Array.isArray(args))return output("Invalid household shopping arguments.");
+    return output(controlHouseholdBasket(call.name,args,chat.user.id,chat.group?chat.id:undefined));
+  }
   if (microphoneTurn && MICROPHONE_DENIED.has(call.name)) return output("This action requires a typed WhatsApp request or approval. Room microphone input cannot authorize it.");
 
   /** Old invite pages become Google links, and {link} becomes the link made this conversation, exactly. */

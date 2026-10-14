@@ -9,12 +9,14 @@
     "typecheck": "tsc --noEmit",
     "music:service": "tsx src/music-daemon.ts",
     "music": "tsx src/music-cli.ts",
-    "reading:worker": "tsx src/reading-worker.ts"
+    "reading:worker": "tsx src/reading-worker.ts",
+    "zepto:setup": "tsx src/zepto-setup.ts"
   },
   "type": "module",
   "private": true,
   "dependencies": {
     "@anthropic-ai/sdk": "^0.132.0",
+    "@modelcontextprotocol/client": "2.3.1",
     "@mozilla/readability": "^0.6.0",
     "baileys": "^7.0.0-rc14",
     "fast-xml-parser": "^5.11.2",
