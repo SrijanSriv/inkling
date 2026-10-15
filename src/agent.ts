@@ -84,7 +84,12 @@ async function quickAck(text: string, turn: Turn): Promise<{ react: boolean; emo
       },
     },
   }));
-  return JSON.parse(res.output_text) as { react: boolean; emoji: string };
+  const value: unknown = JSON.parse(res.output_text);
+  if (!value || typeof value !== "object" || !("react" in value) || typeof value.react !== "boolean"
+    || !("emoji" in value) || typeof value.emoji !== "string") {
+    throw new Error("Invalid acknowledgement shape");
+  }
+  return { react: value.react, emoji: value.emoji };
 }
 
 /** Tools slow enough to deserve an acknowledgement; instant ones (lists, notes, dates) don't. */
@@ -1090,7 +1095,13 @@ export async function respond(chat: Chat, batch: Incoming[], actions: ChatAction
   if (!microphoneTurn) void quickAck(messages, turn)
     // Just the emoji: some models add a word ("📅 plans").
     .then((r) => r.react && r.emoji.trim() && acknowledge(r.emoji.trim().split(/\s+/)[0]))
-    .catch((err) => log.warn({ err }, "quick acknowledgement check failed"));
+    .catch((error) => {
+      // Parsing and provider exceptions can include private message or model content.
+      const failure = error instanceof SyntaxError ? "json"
+        : error instanceof Error && error.message === "Invalid acknowledgement shape" ? "schema"
+        : error instanceof Error && error.name === "APIConnectionTimeoutError" ? "timeout" : "other";
+      log.warn({ failure }, "quick acknowledgement check failed");
+    });
 
   let reply = "";
   let toolCount = 0;
