@@ -1,3 +1,4 @@
+import { articleAudio, articleAudioEnabled, createArticleOffer, articleOfferFor, articleOfferYes, isArticleOfferId } from "./article-audio.js";
 import { shoppingErrorReply } from "./shopping-replies.js";
 import { householdCheckout, shoppingApprovalCandidate } from "./household-checkout.js";
 import { instamartEnabled } from "./instamart.js";
@@ -200,13 +201,16 @@ async function drain(key: string, queue: { busy: boolean; pending: Queued[] }): 
           return getUsers().filter(u => phonesOf(u).some(phone => info.phones.includes(phone))).map(u => u.id);
         } : undefined;
         const reply = await runLinkWorkflow(key, user.id, msg.key.id!, msg.text, members);
-        if (reply) await sendReply(msg.chatJid, reply);
+        if (reply) {
+          await sendReply(msg.chatJid, reply);
+          if(articleAudioEnabled()&&reply.includes("\nSaved to "))await sendArticleOffer(key,msg.chatJid,msg.text.trim());
+        }
       } catch { log.warn({ chat: key }, "link workflow delivery failed"); }
       finally { startedPending([msg]); }
       continue;
     }
-    const boundary = queue.pending.findIndex(item => item.workflow || item.msg.audioError || item.msg.source === "microphone" || shoppingApprovalCandidate(item.msg.typedText??item.msg.text));
-    const batch = queue.pending.splice(0, first.msg.source === "microphone" || shoppingApprovalCandidate(first.msg.typedText??first.msg.text) ? 1 : boundary < 0 ? queue.pending.length : boundary);
+    const boundary = queue.pending.findIndex(item => item.workflow || isArticleOfferId(item.msg.replyToId) || item.msg.audioError || item.msg.source === "microphone" || shoppingApprovalCandidate(item.msg.typedText??item.msg.text));
+    const batch = queue.pending.splice(0, first.msg.source === "microphone" || isArticleOfferId(first.msg.replyToId) || shoppingApprovalCandidate(first.msg.typedText??first.msg.text) ? 1 : boundary < 0 ? queue.pending.length : boundary);
     startedPending(batch.map((b) => b.msg));
     const { msg: last, user } = batch.at(-1)!;
     const { chatJid } = last;
@@ -214,6 +218,18 @@ async function drain(key: string, queue: { busy: boolean; pending: Queued[] }): 
 
     const chat: Chat = last.group ? await groupChat(key, chatJid, user) : { id: key, user };
     if (last.group) groupContext.delete(chatJid); // folded into this turn's saved history
+
+    if(batch.length===1&&isArticleOfferId(last.replyToId)&&articleOfferYes(last.typedText??last.text)){
+      try{
+        const offer=articleOfferFor(key,last.replyToId);
+        if(!offer||Date.now()-offer.at>86400000)throw new Error("That voice offer has expired. Ask me for a voice deep dive and include the article link again.");
+        if(!last.plainText||last.forwarded)throw new Error("Please reply directly to the offer with yes, rather than forwarding it.");
+        const actions=chatActions(chat,chatJid,last.key);
+        const note=await articleAudio.start(key,user.id,last.key.id!,offer.url,"",offer.url,{send:actions.send,voice:actions.sendVoice!,allowed:actions.articleVoiceAllowed!});
+        if(note.startsWith("That voice"))await sendReply(chatJid,note);
+      }catch(error){await sendReply(chatJid,error instanceof Error?error.message:"I couldn’t start the voice walkthrough.");}
+      continue;
+    }
 
     // In groups, commands come after the mention: "@inkling /memory" or "inkling /reset".
     const command =
@@ -249,7 +265,10 @@ async function drain(key: string, queue: { busy: boolean; pending: Queued[] }): 
       const incoming: Incoming[] = batch.map(({ msg, user }) => ({ ...msg, requestId: msg.key.id || undefined, from: user.name }));
       const agentStarted = Date.now();
       const preparation=last.source==="microphone"&&!last.group&&last.key.id?roomSpeech.prepare(user.id,last.key.id):undefined;
-      const reply = await respond(chat, incoming, chatActions(chat, chatJid, last.source === "microphone" ? undefined : last.key),preparation);
+      let articleOfferUrl:string|undefined;
+      const actions=chatActions(chat,chatJid,last.source === "microphone" ? undefined : last.key);
+      actions.offerArticleVoice=(url)=>{articleOfferUrl=url;};
+      const reply = await respond(chat, incoming, actions,preparation);
       const agentMs = Date.now()-agentStarted;
       answerReady=true;
       stopTyping();
@@ -274,6 +293,7 @@ async function drain(key: string, queue: { busy: boolean; pending: Queued[] }): 
           throw err;
         }
       } else if (!spoken) await sendReply(chatJid, reply);
+      if(articleOfferUrl&&reply)await sendArticleOffer(key,chatJid,articleOfferUrl);
       if (last.source === "microphone" && last.microphone) log.info({ transcriptionMs: last.microphone.transcriptionMs,
         queueMs: Math.max(0,agentStarted-last.microphone.doneAt-last.microphone.transcriptionMs), agentMs,
         totalMs: Date.now()-last.microphone.doneAt }, "microphone reply completed");
@@ -313,6 +333,10 @@ async function sendReply(chatJid: string, reply: string): Promise<void> {
   }
 }
 
+async function sendArticleOffer(chat:string,jid:string,url:string){
+  const offer=createArticleOffer(chat,url);await sendText(jid,offer.text,offer.id);
+}
+
 /** What the assistant can do in a chat. `key` is the message to react to; scheduled jobs have none. */
 function chatActions(chat: Chat, chatJid: string, key?: WAMessageKey): ChatActions {
   const { user } = chat;
@@ -328,6 +352,12 @@ function chatActions(chat: Chat, chatJid: string, key?: WAMessageKey): ChatActio
     peopleChanged: () => void answerWaiting(),
     send: (text) => sendText(chatJid, text),
     sendTweet: (text,id) => sendText(chatJid,text,id),
+    sendVoice: (audio) => sendVoiceNote(chatJid,audio),
+    articleVoiceAllowed: async () => {
+      const current=getUsers().find(u=>u.id===user.id);if(!current||isGuest(current))return false;
+      if(!chat.group)return chat.id===current.id;
+      const info=await groupInfo(chatJid,true);return phonesOf(current).some(p=>info.phones.includes(p));
+    },
     sendPrivate: (text) => sendText(`${user.phone}@s.whatsapp.net`, text),
     sendImage: (image, caption) => sendImage(chatJid, image, caption),
     sendDocument: (data, filename) => sendDocument(chatJid, data, filename),

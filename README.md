@@ -24,6 +24,14 @@ captured clip, retained only in memory until one minute after decoding, capped a
 release. **Compare recognizers** runs the configured diagnostic on that same clip without changing the
 active model or acting on the results. See [the microphone design](docs/microphone-v1.md).
 
+Optional English article voice walkthroughs: with `INKLING_ARTICLE_VOICE=true`, the existing local
+speech gateway and host `ffmpeg`, registered users can ask “Explain this article in depth as an English
+voice note” in a DM or group. Normal links still get their usual text summary and saving. After a
+successful summary, an optional voice-deep-dive offer appears; quote that offer and reply “yes” to
+accept. The article is read again and explained in depth, not merely read out from the summary.
+Audio is prepared in the background and sent as one WhatsApp voice note. No new paid voice API.
+See [article voice walkthroughs](docs/article-voice-walkthroughs.md).
+
 Optional household shopping: `INKLING_ZEPTO_*` config enables an encrypted shared basket for
 registered members of one configured group. With `INKLING_SHOPPING_PROVIDER=instamart` and a reviewed,
 connected account, members can search live packs, choose P-number options, and request an exact bill.

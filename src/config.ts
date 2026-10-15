@@ -27,6 +27,7 @@ export const config = {
   model: process.env.INKLING_MODEL ?? (provider === "gemini" ? "gemini-3.5-flash-lite" : provider === "anthropic" ? "claude-opus-5-5" : "gpt-5-mini"),
   transcribeModel: process.env.INKLING_TRANSCRIBE_MODEL ?? "gpt-4o-transcribe",
   backgroundReasoning: process.env.INKLING_BACKGROUND_REASONING === "true",
+  articleVoice: process.env.INKLING_ARTICLE_VOICE === "true",
   whisperUrl: process.env.INKLING_WHISPER_URL || undefined,
   whisperSecret: process.env.INKLING_WHISPER_SECRET || undefined,
   micSource: process.env.INKLING_MIC_SOURCE || undefined,

@@ -1,3 +1,4 @@
+import { articleAudio, articleAudioEnabled, articleAudioTool, requestedArticleAudio } from "./article-audio.js";
 import { shoppingReplyNeedsEvidence, shoppingResultReply, shoppingErrorReply } from "./shopping-replies.js";
 import { householdCheckout } from "./household-checkout.js";
 import { instamartEnabled } from "./instamart.js";
@@ -143,6 +144,9 @@ export type ChatActions = {
   sendTweet?(text: string, id: string): Promise<void>;
   /** Sends one message to the person's own private chat with the assistant (confirmations asked for in a group). */
   sendPrivate(text: string): Promise<void>;
+  offerArticleVoice?(url:string): void;
+  sendVoice?(audio: Buffer): Promise<void>;
+  articleVoiceAllowed?(): Promise<boolean>;
   sendImage(image: Buffer, caption?: string): Promise<void>;
   sendDocument(data: Buffer, filename: string): Promise<void>;
   resendMedia(which: { replied: boolean; kind?: string; from?: string }): Promise<string>;
@@ -817,6 +821,7 @@ Rules:
 - Never say you did something (sent a poll, added an event, connected an account, saved a draft) unless you actually called the tool for it this turn. Never say you're about to do something ("posting it now", "sending it", "on it") unless you're calling the tool for it in this same turn. If you can't do it, say so plainly, and never make up services, apps, APIs, repositories or pull requests.
 - When you used several tools, say what actually happened: if one worked and another didn't, say both, and lead with what worked.
 - Earlier assistant replies may be mistaken. To answer about saved birthdays, lists, reminders or current playback, check the relevant tool now. A line in history saying a tool completed is not a tool call. Never invent such lines. If a reminder tool returns an error or a past time, it was not set; don't claim it is scheduled.
+- Only when explicitly asked to explain a link by voice/audio, use article_voice_walkthrough. It reads the source and prepares a detailed English listening walkthrough, not just the saved short summary. Normal bare links still follow the existing summary/save rule, and ordinary requests to elaborate get text, not audio. Receiving a voice note does not by itself request an audio walkthrough. Find the exact link in this chat or its saved list with list_show/recall; if the intended article is ambiguous, ask which one. The tool sends a preparation update and later delivers audio: after it accepts, reply with nothing and never claim it is already sent.
 - Recurring bare-link processing uses link_workflow, not remember. It only reads, summarizes and saves to a chat-local list; DM/group lists are separate. Use show to inspect and set/disable only on explicit request.
 - Auto-replies: when someone wants you to send something whenever a word comes up ("every time someone says hype, send this"), use auto_reply_add. The photo has to be in their message or the one they replied to. auto_reply_list and auto_reply_remove manage them.${
   group ? `\n- You can't change how you work from a group chat. If someone asks for a new ability you don't have, say ${getUsers().find((u) => u.admin)?.name ?? "the admin"} can ask you for it in a private chat.` : ""
@@ -1017,6 +1022,7 @@ export async function respond(chat: Chat, batch: Incoming[], actions: ChatAction
     ...listTools,
     ...(householdShoppingAccess(user.id,group?chat.id:undefined)?[...householdShoppingTools,...(instamartEnabled()?liveHouseholdTools:[])]:[]),
     ...(!guest ? linkWorkflowTools : []),
+    ...(!guest && articleAudioEnabled() ? [articleAudioTool] : []),
     ...dateTools,
     ...watchTools,
     ...(group || guest ? [] : [briefTool]),
@@ -1189,7 +1195,7 @@ export async function respond(chat: Chat, batch: Incoming[], actions: ChatAction
             toolResults.push({name:call.name,output:text});
             continue;
           }
-          let musicKey: string | undefined = call.name.startsWith("coding_") ? musicTurnKey : undefined;
+          let musicKey: string | undefined = (call.name.startsWith("coding_") || call.name === "article_voice_walkthrough") ? musicTurnKey : undefined;
           if (call.name === "music_control") {
             musicKey = musicCallKeys.get(call.call_id);
             if (!musicKey) {
@@ -1295,8 +1301,14 @@ export async function respond(chat: Chat, batch: Incoming[], actions: ChatAction
   else if(instamartEnabled()&&householdShoppingAccess(user.id,group?chat.id:undefined)&&(shoppingReplyNeedsEvidence(reply)||shoppingReplyNeedsEvidence(messages))&&!did.includes("showed the exact household checkout preview")){
     reply=toWhatsApp(`I couldn’t confirm that request. Here’s what’s actually saved:\n\n${controlHouseholdBasket("household_basket_show",{},user.id,chat.id)}\n\n${await householdCheckout.status(user.id,chat.id)}\n\nFor Google Pay, I’ll send a payment link privately after you approve the final bill.`);
   }
-  if(did.includes("showed the exact household checkout preview"))reply="";
+  if(did.includes("showed the exact household checkout preview")||did.includes("sent article voice preparation update"))reply="";
   if (!reply && !did.length && !automatic) reply = "I got a bit lost on that one. Mind asking again, maybe a different way?";
+
+  if(articleAudioEnabled()&&!isGuest(user)&&!microphoneTurn&&!batch.some(m=>requestedArticleAudio(m.text.replace(/\(voice note\)/gi,"")))&&batch.some(m=>/^https?:\/\/\S+$/i.test(m.text.trim())||/\b(?:summari[sz]e|summary|explain|elaborate)\b/i.test(m.text))){
+    const page=toolResults.findLast(r=>r.name==="open_link"&&r.output.startsWith("Page content from "));
+    const url=page?.output.match(/^Page content from (https?:\/\/\S+) \(written/ )?.[1];
+    if(url)actions.offerArticleVoice?.(url);
+  }
 
   const saved = images.length ? `${userText}\n[sent ${images.length} photo${images.length > 1 ? "s" : ""}]` : userText;
   endTurn(turn, { tools: toolCount, photos: images.length, replied: !!reply });
@@ -1448,6 +1460,14 @@ async function runTool(
       case "link_workflow":
         if (!humanTurn && args.action !== "show") return output("Error: A scheduled task cannot activate or change link rules.");
         return output(configureLinkWorkflow(chat.id, chat.user.id, !!chat.group, args, said));
+      case "article_voice_walkthrough": {
+        if(!humanTurn||!requestedArticleAudio(said.replace(/\(voice note\)|\(room microphone transcript\)/gi,"")))return output("Error: An article voice walkthrough needs an explicit request for audio. Normal links and text elaborations do not trigger it.");
+        if(!articleAudioEnabled()||!actions.sendVoice||!actions.articleVoiceAllowed)return output("Error: Local article voice walkthroughs are not configured here.");
+        try{
+          const result=await articleAudio.start(chat.id,chat.user.id,musicRequestKey??call.call_id,String(args.url??""),String(args.focus??""),conversation,{send:actions.send,voice:actions.sendVoice,allowed:actions.articleVoiceAllowed});
+          did.push("sent article voice preparation update");return output(result);
+        }catch{return output("Error: I couldn’t start that voice walkthrough. Make sure the article link is in this chat and try again after any current walkthrough finishes.");}
+      }
       case "open_link":
         return output(await openLink(String(args.url), conversation));
       case "remember":
