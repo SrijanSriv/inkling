@@ -24,7 +24,8 @@ class Ledger(unittest.TestCase):
             with self.assertRaises(ValueError):ledger.validate(context,altered,names,root,check)
     def test_render_discloses_inputs_and_measured_results(self):
         with tempfile.TemporaryDirectory() as d:
-            context,result=self.fixture(Path(d));result.update(summary='A synthetic source fix.',deferred=['Other issues remain.']);baseline={'suite':'software-probes-v2','results':[{'probe':'protocol_output','result':'fail'}]}
+            context,result=self.fixture(Path(d));result.update(summary='A synthetic source fix.',deferred=['Other issues remain.'],advice=['Use an explicit date when requesting a reminder.']);baseline={'suite':'software-probes-v2','results':[{'probe':'protocol_output','result':'fail'}]}
             text=ledger.render(context,result,'a'*40,'b'*40,'example/example',baseline,baseline)
             self.assertIn('Codex/OpenAI',text);self.assertIn('**Not provided:**',text);self.assertIn('fresh baseline **fail**, after patch **pass**',text);self.assertIn('/blob/'+'a'*40+'/src/example.ts#L1',text);self.assertIn('/blob/'+'b'*40+'/src/example.ts#L1',text);self.assertIn('not deployed',text)
+            self.assertIn('Use an explicit date when requesting a reminder.',text)
 if __name__=='__main__':unittest.main()

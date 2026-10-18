@@ -91,6 +91,8 @@ def render(context,result,base_sha,after_sha,repository,baseline,pi_report):
     lines += ['','## Inspection decisions and remaining work','']
     for outcome in result['targetOutcomes']: lines.append('- `'+outcome['id']+'`: **'+outcome['state']+'**. '+outcome['note'])
     for text in result['deferred']: lines.append('- Deferred: '+text)
+    lines += ['','## Usage advice','']
+    lines += ['- '+text for text in result.get('advice',[])] or ['None proposed.']
     lines += ['','**Access and deployment:** privacy/consent/operations controls and files reserved by open PRs were protected. The model had no publishing token or deploy permission. A trusted wrapper opened this PR; human review and merge are required. Proposed changes are not deployed.']
     body='\n'.join(lines)+'\n'
     if len(body)>30000: raise ValueError('Evidence ledger is too large')
