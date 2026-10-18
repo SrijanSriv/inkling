@@ -8,7 +8,7 @@ import { householdCheckout, shoppingApprovalCandidate } from "./household-checko
 import { instamartEnabled } from "./instamart.js";
 import { householdShoppingAccess, householdShopStatus, controlHouseholdBasket } from "./household-shopping.js";
 import { resetTweetMemory, startTweetEditor, tweetsEnabled } from "./tweets.js";
-import { linkWorkflowCandidate, reserveLink, runLinkWorkflow } from "./link-workflow.js";
+import { acknowledgeLinkDelivery, linkWorkflowCandidate, reserveLink, runLinkWorkflow } from "./link-workflow.js";
 import { startCodingNotifications } from "./coding.js";
 import { config, findUserByPhone, getUsers, phonesOf, type User } from "./config.js";
 import { respond, type Chat, type ChatActions, type Incoming } from "./agent.js";
@@ -204,18 +204,22 @@ async function drain(key: string, queue: { busy: boolean; pending: Queued[] }): 
     if (first.workflow) {
       queue.pending.shift();
       const { msg, user } = first;
+      let delivered = false;
       try {
         const members = msg.group ? async () => {
           const info = await groupInfo(msg.chatJid, true);
           return getUsers().filter(u => phonesOf(u).some(phone => info.phones.includes(phone))).map(u => u.id);
         } : undefined;
         const reply = await runLinkWorkflow(key, user.id, msg.key.id!, msg.text, members);
+        if (!reply) delivered = true; // Expired, revoked or already acknowledged work is terminal.
         if (reply) {
           await sendReply(msg.chatJid, reply);
+          acknowledgeLinkDelivery(key, user.id, msg.key.id!, msg.text);
+          delivered = true;
           if(articleAudioEnabled()&&reply.includes("\nSaved to "))await sendArticleOffer(key,msg.chatJid,msg.text.trim());
         }
       } catch { recordIssue(key,"link_delivery_failed"); log.warn({ chat: key }, "link workflow delivery failed"); }
-      finally { startedPending([msg]); }
+      finally { if (delivered) startedPending([msg]); }
       continue;
     }
     const boundary = queue.pending.findIndex(item => item.workflow || feedbackBoundary(feedbackWords(item.msg), item.msg.replyToId) || isArticleOfferId(item.msg.replyToId) || item.msg.audioError || item.msg.source === "microphone" || shoppingApprovalCandidate(item.msg.typedText??item.msg.text));

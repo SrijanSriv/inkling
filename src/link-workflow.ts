@@ -140,13 +140,26 @@ export async function runLinkWorkflow(chat: string, actor: string, message: stri
     // List insertion has its own source ID, covering a crash between insertion and receipt commit.
     addLinkItem(chat, rule.list, receipt.item!, actor, receipt.id);
     if (chat === actor) captureTweetInput(actor, { id: `link:${receipt.id}`, kind: "link", text: receipt.item!, url, at: receipt.at });
-    finish("done");
-    appendHistory(chat, [{ role: "user", content: text }, { role: "assistant", content: receipt.reply! }]);
+    // Keep the prepared reply until the transport acknowledges sending it.
+    // Replays reuse the source ID for list insertion and do not summarize again.
     log.info({ chat, outcome: "saved" }, "link workflow");
     return receipt.reply;
   } catch {
+    if (receipt.status === "prepared") throw new Error("Prepared link processing could not finish.");
     finish("failed");
     log.warn({ chat, outcome: "failed" }, "link workflow");
-    return "I couldn't read and save that link reliably. It hasn't been marked as processed. You can ask me to try it again.";
+    return "I couldn't finish processing that link reliably. Please send a new request if you want me to try again.";
   }
+}
+
+/** Called only after WhatsApp acknowledges the prepared reply. */
+export function acknowledgeLinkDelivery(chat: string, actor: string, message: string, text: string): void {
+  const state = load(chat), receipt = state.receipts.find(r => r.id === receiptId(actor, message));
+  if (!receipt || receipt.status !== "prepared" || !receipt.reply) return;
+  const reply = receipt.reply;
+  receipt.status = "done";
+  delete receipt.item;
+  delete receipt.reply;
+  save(chat, state);
+  appendHistory(chat, [{ role: "user", content: text }, { role: "assistant", content: reply }]);
 }

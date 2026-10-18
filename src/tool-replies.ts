@@ -2,7 +2,7 @@ import { formatMusicReply } from "./music-replies.js";
 // Old assistant messages can contain invented tool receipts as well as real action notes.
 // Neither belongs in a user-facing answer or proves a tool ran in the current turn.
 export function stripToolStatusNotes(text: string): string {
-  return text.replace(/\((?:[a-z][a-z0-9]*_[a-z0-9_]+\b[^\n)]*|music command\b[^\n)]*)\)/gi, "").trim();
+  return text.replace(/^.*\bdeclaration:[a-z][a-z0-9_]*:[^\n]*$/gim, "").replace(/\((?:[a-z][a-z0-9]*_[a-z0-9_]+\b[^\n)]*|music command\b[^\n)]*)\)/gi, "").trim();
 }
 
 export function cleanToolReply(text: string): string {
@@ -37,8 +37,13 @@ export function toolFailed(result: ToolResult): boolean {
 /** An unrelated successful tool (e.g. a poll or a note) cannot back a reminder or playback claim. */
 export function unsupportedActionClaim(text: string, results: ToolResult[]): string | undefined {
   const succeeded = results.filter((result) => !toolFailed(result));
+  const emailClaim = /\b(?:sent|emailed)\b/i.test(text) && !/\b(?:not|never|nothing|wasn't|was not|couldn't)\s+(?:\w+\s+){0,2}(?:sent|emailed)\b/i.test(text);
+  if (emailClaim && results.some(r => r.name === "send_email" || r.name === "confirm_send" && /\b(?:email|emailed|mail)\b/i.test(r.output)) &&
+      !succeeded.some(r => /^(?:send_email|confirm_send)$/.test(r.name) && /^(?:Sent email\b|Email sent\b|Emailed\b|Sent\.)/i.test(r.output))) {
+    return "I couldn't confirm that the email was sent. A preview or draft is not delivery.";
+  }
   const reminder = /\b(?:i(?:'ll| will) remind|yaad dila (?:dunga|dungi|doonga|doongi)|reminder\b[^.!?\n]{0,60}\b(?:set|laga|kar)\s+(?:hai|diya|di|diye|dunga|dungi))\b/i.test(text);
-  if (reminder && !succeeded.some((r) => /^(?:set_reminder|list_reminders|date_add)$/.test(r.name))) {
+  if (reminder && !succeeded.some((r) => /^(?:set_reminder|date_add)$/.test(r.name))) {
     return "I couldn't confirm that the reminder was set.";
   }
   const musicTurn = results.some(r => r.name === "music_control");

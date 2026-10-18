@@ -73,7 +73,17 @@ export class ArticleAudio {
   if(!id||url.length>4000||focus.length>500||!conversation.includes(url)||!/^https?:\/\//i.test(url))throw new Error('Please send the article link in this chat, or choose one from this chat’s saved links.');
   if(!await delivery.allowed())throw new Error('You no longer have access to this chat.');
   const file=chatFile(chat,'article-voice.json');let receipts=readSealedJson<Receipt[]>(file,[]).filter(r=>Date.now()-r.at<14*86400000);
-  if(receipts.some(r=>r.id===id))return 'That voice-walkthrough request has already been handled. Send a new message if you want to try again.';
+  // A previous process may have stopped after sending but before recording the acknowledgement.
+  let reconciled=false;
+  for(const r of receipts)if(r.state==='working'&&r.boot!==boot){r.state='uncertain';reconciled=true;}
+  if(reconciled)writeSealedJson(file,receipts);
+  const previous=receipts.find(r=>r.id===id);
+  if(previous)return previous.state==='sent'
+   ? 'That voice walkthrough was sent. Please check this chat before requesting another.'
+   : previous.state==='uncertain'
+    ? 'That voice walkthrough has an uncertain delivery status after an interruption. Please check this chat before sending a new request. I will not automatically resend it.'
+    : previous.state==='working'?'That voice walkthrough is still being prepared.'
+    : 'That voice walkthrough failed. Send a new request if you want to try again.';
   if(this.busy)throw new Error('I’m already preparing an article voice note. Please try again when it finishes.');
   if(receipts.filter(r=>Date.now()-r.at<3600000).length>=4)throw new Error('I’ve reached this chat’s four walkthrough requests for the hour. Please try again later.');
   const receipt:Receipt={id,boot,at:Date.now(),state:'working',url};receipts.push(receipt);writeSealedJson(file,receipts.slice(-100));this.busy=true;

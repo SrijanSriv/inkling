@@ -85,6 +85,7 @@ export function handleWatch(name: string, args: Record<string, unknown>, chatId:
       const w = all.find((x) => x.id === String(args.id).trim());
       if (!w) return "No watch with that id.";
       w.state = String(args.state).slice(0, 500);
+      w.lastChecked = Date.now();
       writeSealedJson(file(chatId), all);
       return "Saved.";
     }
@@ -92,12 +93,9 @@ export function handleWatch(name: string, args: Record<string, unknown>, chatId:
   return `Unknown watch tool ${name}`;
 }
 
-/** Watches due for a check now; marks them checked so each is only run once per interval. */
+/** Reading due work is not completion. Only watch_update records a completed lookup. */
 export function takeDueWatches(chatId: string, now = Date.now()): Watch[] {
   const all = readSealedJson<Watch[]>(file(chatId), []);
   const due = all.filter((w) => now - w.lastChecked >= (w.every === "3h" ? 3 : 24) * 3_600_000);
-  if (!due.length) return [];
-  due.forEach((w) => (w.lastChecked = now));
-  writeSealedJson(file(chatId), all);
   return due;
 }
