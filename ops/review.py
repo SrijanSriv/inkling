@@ -1,4 +1,4 @@
-"""Laptop: private aggregate report -> isolated Codex -> checked, human-reviewed PR."""
+"""Laptop: strict synthetic report -> isolated Codex -> checked, human-reviewed PR."""
 import datetime as dt
 import hashlib
 import json
@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 from common import atomic, entrypoint, laptop_notice, lock, read, run
+from software_report import load as load_software_report
 
 
 def github(c, args):
@@ -35,7 +36,7 @@ def changed_files(work):
         p = Path(name)
         if p.is_absolute() or '..' in p.parts or any(ord(x)<32 for x in name):
             raise RuntimeError('Invalid review path')
-        if p.parts[0] in {'.github','ops','.git','.codex','.agents','data','node_modules','.tmp','.inkling'} or p.name in {'AGENTS.md','CLAUDE.md'} or p.name.startswith('.env'):
+        if p.parts[0] in {'.github','ops','.git','.codex','.agents','data','node_modules','.tmp','.inkling','experiments'} or p.name in {'AGENTS.md','CLAUDE.md'} or p.name.startswith('.env'):
             raise RuntimeError('Protected review path')
         if name.startswith(('scripts/inkling-nightly.', 'scripts/inkling-update.', 'scripts/inkling-review.', 'scripts/inkling-webhook.')):
             raise RuntimeError('Protected maintenance service')
@@ -49,9 +50,22 @@ def changed_files(work):
     return names
 
 
+def quarantine_legacy(state):
+    # Old aggregate reports never reach a model, even when pending during migration.
+    state = Path(state)
+    for candidate in sorted((state/'inbox').glob('*.json')):
+        try:
+            load_software_report(candidate)
+        except (ValueError, OSError):
+            quarantine = state/'legacy-report-quarantine'
+            quarantine.mkdir(mode=0o700, exist_ok=True)
+            candidate.replace(quarantine/candidate.name)
+
+
 def main(c):
     state = Path(c['state'])
     with lock(state/'review.lock'):
+        quarantine_legacy(state)
         receipts = read(state/'review-state.json', {})
         pending = sorted(p for p in (state/'inbox').glob('*.json') if p.stem not in receipts)
         if not pending:
@@ -135,7 +149,7 @@ def main(c):
             # A GitHub token is sent only to this configured repository on github.com.
             run(['git','-c','credential.helper=','push','https://github.com/'+c['repository']+'.git','HEAD:refs/heads/'+branch],cwd=work,env=publish_env,timeout=180)
             body = state/'pr-body.md'
-            body.write_text(result['body']+'\n\nValidation: `npm run typecheck` and browser/coding JavaScript syntax checks passed in the offline sandbox.\n\nAutomated nightly review using aggregate diagnostics only. No private messages, mailbox data or credentials were provided. Human review and merge are required; this job cannot deploy.\n')
+            body.write_text(result['body']+'\n\nValidation: `npm run typecheck` and browser/coding JavaScript syntax checks passed in the offline sandbox.\n\nAutomated nightly review using a fixed public synthetic software suite only. No private messages, mailbox data or credentials were provided. Human review and merge are required; this job cannot deploy.\n')
             url = github(c,['pr','create','--repo',c['repository'],'--base',c['branch'],'--head',branch,'--title',result['title'],'--body-file',str(body)]).stdout.strip()
         message = ('Nightly review opened a PR: '+url+'\n'+result['summary']+'\nReview and merge it when ready; it has not been deployed.') if url else ('Nightly review finished. No code changes proposed. '+result['summary'])
         if advice:

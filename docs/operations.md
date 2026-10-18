@@ -1,4 +1,4 @@
-# Nightly recovery, diagnostics and reviewed deployment
+# Nightly recovery, synthetic checks and reviewed deployment
 
 These optional host jobs are off until installed and configured. They use the existing Pi/laptop SSH connection,
 not a public API. There is no cloud backup subscription. Codex reviews consume the logged-in account's ordinary
@@ -20,14 +20,19 @@ usage allowance. GitHub Pages is unrelated to these private backups.
   Restic metadata is checked daily and all repository data on Sundays. Retention is 30 daily, 8 weekly and 12 monthly
   recovery points. Pruning follows a successful restore check. The laptop mirror is guarded by `backup.lock`;
   its completion marker is written only after a successful transfer.
-- A separate report contains aggregate event/tool/error counts, known error categories, source locations, the public
-  code revision and a connection-health boolean. Unknown logger text is discarded. No chat history, memory,
-  message text, tool arguments, addresses, contact identifiers, raw errors, mailbox data or credentials enter the
-  report. It cannot establish whether replies were helpful, actions were semantically correct or music was audible.
-- The laptop clones the configured public GitHub repository. Once per report date, Codex inspects current source
-  and diagnostics in a disposable workspace, with command networking disabled and private host files inaccessible.
-  It can research public documentation through hosted web search. Permission and filesystem/network canary checks
-  must pass before a model turn starts. The same pinned Codex adapter as the general coding worker is used.
+- A separate fixed software report runs all nine public synthetic probes every night. The Pi uses Bubblewrap
+  filesystem, PID and network namespaces with committed source and disposable fake data. It has no home,
+  production data, credentials, inherited provider keys or journal mount. Neither actual chat events nor
+  operational counts choose the cases. Exact schema validation rejects extra fields before transfer and again
+  on the laptop. See [the payload and exact prompt](nightly-codex-payload.md).
+- Legacy aggregate reports are no longer transferred. The laptop moves old/unrecognized inbox reports into
+  private quarantine before any model work. They are not silently converted or used as fallback evidence.
+- The laptop fetches the configured public GitHub default branch before each new source review. Codex runs in
+  a disposable workspace with command networking disabled and private host files inaccessible. Trusted probes
+  rerun through that OS-enforced sandbox before a model turn; their full result accompanies the Pi report and
+  public maintenance-PR context. It can research public documentation through hosted web search. Permission
+  and filesystem/network canary checks must pass before a model turn. After edits the wrapper reruns the
+  trusted suite and refuses regressions of previously passing probes.
 - The wrapper verifies typecheck and browser/coding syntax checks in that sandbox. Changes to `.github/`, `ops/`,
   instruction files, credentials and runtime data are refused. Change count/size, symlinks and obvious private
   information are checked before upload. The model has no GitHub token, backup password or deploy credentials.
@@ -83,13 +88,14 @@ GitHub webhook. Remove the timer drop-in and reload/restart the timer to restore
 
 ## Installation
 
-Requirements: Python 3.12+, SSH/rsync, Restic, Node/npm, systemd user services with lingering enabled; the laptop also
+Requirements: Python 3.12+, SSH/rsync, Restic, Node/npm, Bubblewrap (`bwrap`) on the Pi, systemd user services with lingering enabled; the laptop also
 needs GitHub CLI and the supported pinned Codex binary plus its existing ChatGPT sign-in. Install tools from trusted
 package registries. The jobs do not need root. Keep configuration/state directories mode 700, files mode 600.
 
 Copy `ops/` and `coding/codex.mjs` into `~/.local/lib/inkling-ops/`, preserving their relative paths. This installed
 trusted wrapper is **not automatically replaced by model-generated PRs**. Changes to maintenance controls require
-manual installation after review. Configure each host using `ops/pi.example.json` or `ops/laptop.example.json` at
+manual installation after review. Include `ops/probes/`, `software_report.py`, `software-report.mjs` and
+`review-instructions.md`; copying only the old entry points is insufficient. Configure each host using `ops/pi.example.json` or `ops/laptop.example.json` at
 `~/.config/inkling-ops/config.json`. All deployment identities and locations belong in private configuration.
 
 Generate a random Restic password outside the repository and put it at `backup_password` on both hosts. Keep a
@@ -134,7 +140,9 @@ instance. Tokens may have been revoked since backup; reconnect Google if needed.
 emails or reconnects a copied WhatsApp session.
 
 Useful status files in the private state directory: `nightly.json`, `transfer.json`, `deploy.json`,
-`backup-last-success` (laptop), `review-state.json`, `last-review-validation.json`. `systemctl --user list-timers`
+`backup-last-success` (laptop), `review-state.json`, `last-review-validation.json`,
+`software-reports/YYYY-MM-DD.json` (Pi), `last-software-review-input.json` and
+`last-software-review-prompt.txt` (laptop). `systemctl --user list-timers`
 shows schedules; journal entries report sanitized maintenance outcomes, never subprocess output or model text.
 `python3 ~/.local/lib/inkling-ops/ops/nightly.py --force` forces a recovery point;
 `python3 ~/.local/lib/inkling-ops/ops/deploy.py --retry` retries a previously failed revision after investigation.

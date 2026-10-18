@@ -8,7 +8,7 @@ import shutil
 import time
 from zoneinfo import ZoneInfo
 from common import atomic, config, entrypoint, lock, notify, read, restic, run
-from diagnostics import collect
+from software_report import collect, load
 
 
 def inventory(root):
@@ -81,8 +81,9 @@ def transfer(c):
     run(['rsync', '-az', '--delete-delay', '--rsync-path', remote_rsync,
          '-e', 'ssh -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=3',
          c['backup_repository']+'/', host+':'+remote+'/backups/'], timeout=1800)
-    for p in sorted((Path(c['state'])/'reports').glob('*.json')):
-        # Publish each diagnostic atomically after the backup transfer is complete.
+    for p in sorted((Path(c['state'])/'software-reports').glob('*.json')):
+        load(p)  # Reject extra fields, legacy diagnostics and malformed reports before any transfer.
+        # Publish each strictly validated software report atomically after the backup transfer is complete.
         run(['scp','-q','-o','BatchMode=yes','-o','ConnectTimeout=10',p,host+':'+remote+'/inbox/'+p.name+'.tmp'])
         run(['ssh','-o','BatchMode=yes','-o','ConnectTimeout=10',host,
              'mv '+shlex.quote(remote+'/inbox/'+p.name+'.tmp')+' '+shlex.quote(remote+'/inbox/'+p.name)])
@@ -108,20 +109,28 @@ def main(c):
         done = read(state/'nightly.json', {})
         if done.get('day') != today or '--force' in __import__('sys').argv:
             end = dt.datetime.now(dt.timezone.utc)
-            start = done.get('until') or (end-dt.timedelta(days=1)).isoformat()
-            report = collect(c, start, end.isoformat())
             files = snapshot(c, today)
-            atomic(state/'reports'/f'{today}.json', report)
             done = {'day': today, 'until': end.isoformat(), 'files': files, 'capturedAt': end.isoformat()}
             atomic(state/'nightly.json', done)
+        # Backups do not depend on a successful software check. Never fall back to private diagnostics.
+        report_path = state/'software-reports'/f'{today}.json'
+        audit_ok = True
+        try:
+            if not report_path.exists():
+                atomic(report_path, collect(c))
+            load(report_path)
+        except Exception:
+            audit_ok = False
         # Repeat this even when today's snapshot is already done: outages must not lose a night.
         transfer(c)
+        if not audit_ok:
+            notify(c, 'software-check-'+today, 'The backup was transferred, but isolated software checks failed. No diagnostic fallback was sent to Codex; maintenance will retry.')
         success = read(state/'transfer.json', {})
         if success.get('day') != today:
-            notify(c, 'backup-'+today, 'Nightly backup saved to the laptop and restored successfully for verification. The private diagnostic report is queued for Codex review.')
+            notify(c, 'backup-'+today, 'Nightly backup saved to the laptop and restored successfully for verification. Only fixed synthetic software checks are eligible for Codex review.')
         atomic(state/'transfer.json', {'day': today, 'at': dt.datetime.now(dt.timezone.utc).isoformat()})
         # Keep bounded non-sensitive local reports; backed-up memory retention is separate.
-        for p in (state/'reports').glob('*.json'):
+        for p in (state/'software-reports').glob('*.json'):
             if time.time()-p.stat().st_mtime > 40*86400:
                 p.unlink()
         print('Backup, restore verification and laptop transfer succeeded.', flush=True)

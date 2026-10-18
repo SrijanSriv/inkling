@@ -659,10 +659,11 @@ policy. Backend servers and automatic browser testing are outside this initial p
 
 ### Optional nightly operations
 
-[The host operations guide](docs/operations.md) describes encrypted Pi-to-laptop recovery backups, private aggregate
-runtime diagnostics, an isolated nightly Codex review that proposes GitHub PRs, owner-only WhatsApp notifications,
+[The host operations guide](docs/operations.md) describes encrypted Pi-to-laptop recovery backups, fixed synthetic
+software checks, an isolated nightly Codex review that proposes GitHub PRs, owner-only WhatsApp notifications,
 and checked deployment of the reviewed default branch with rollback. These jobs need explicit host installation and
 private configuration; they are not enabled by cloning the repository or starting Inkling.
+[The nightly payload guide](docs/nightly-codex-payload.md) shows the exact allowed report and review prompt.
 
 
 ### Memory reliability and recurring links
