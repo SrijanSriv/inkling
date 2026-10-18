@@ -16,6 +16,11 @@ def report():
 
 
 class StrictBoundary(unittest.TestCase):
+    def test_new_pr_notice_is_distinct_from_advice_only(self):
+        day='2026-01-01';url='https://github.com/example/example/pull/1'
+        self.assertNotEqual(review.review_notice_key(day,None),review.review_notice_key(day,url))
+        self.assertEqual(review.review_notice_key(day,url),review.review_notice_key(day,url))
+
     def test_only_complete_fixed_schema(self):
         original = report()
         self.assertEqual(loads(json.dumps(original)), original)

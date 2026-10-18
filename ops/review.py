@@ -62,6 +62,11 @@ def quarantine_legacy(state):
             candidate.replace(quarantine/candidate.name)
 
 
+def review_notice_key(day, url):
+    # A later PR must not be deduplicated against an earlier advice-only result.
+    return 'review-'+day+('-'+hashlib.sha256(url.encode()).hexdigest()[:12] if url else '')
+
+
 def main(c):
     state = Path(c['state'])
     with lock(state/'review.lock'):
@@ -83,7 +88,7 @@ def main(c):
         existing = json.loads(github(c,['pr','list','--repo',c['repository'],'--head',branch,'--state','all','--json','url']).stdout)
         if existing:
             url = existing[0]['url']
-            laptop_notice(c,'review-'+day,'Nightly review opened a PR for you: '+url+'\nReview and merge it when ready; it has not been deployed.')
+            laptop_notice(c,review_notice_key(day,url),'Nightly review opened a PR for you: '+url+'\nReview and merge it when ready; it has not been deployed.')
             receipts[day] = {'pr': url}
             atomic(state/'review-state.json',receipts)
             return
@@ -154,7 +159,7 @@ def main(c):
         message = ('Nightly review opened a PR: '+url+'\n'+result['summary']+'\nReview and merge it when ready; it has not been deployed.') if url else ('Nightly review finished. No code changes proposed. '+result['summary'])
         if advice:
             message += '\nUsage advice: '+' '.join(advice)
-        laptop_notice(c,'review-'+day,message[:5500])
+        laptop_notice(c,review_notice_key(day,url),message[:5500])
         receipts[day]={'pr':url,'at':dt.datetime.now(dt.timezone.utc).isoformat(),'summary':result['summary'],'advice':advice}
         atomic(state/'review-state.json',receipts)
         shutil.rmtree(work,ignore_errors=True)

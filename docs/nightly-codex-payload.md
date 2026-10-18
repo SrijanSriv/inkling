@@ -178,8 +178,8 @@ preview and author-consent implementation before any request can leave the devic
 
 ## Verification and operational files
 
-- 23 offline operations tests, including strict schemas, Python/JavaScript agreement, 5,000 rejected private-field
-  substitutions, legacy quarantine, old-report exclusion, failed-audit backup continuity and deployment rollback.
+- 24 offline operations tests, including strict schemas, Python/JavaScript agreement, 5,000 rejected private-field
+  substitutions, legacy quarantine, old-report exclusion, failed-audit backup continuity, distinct new-PR notices after advice-only reviews, and deployment rollback.
 - Real Pi namespace/preflight checks plus all nine synthetic application checks.
 - Real laptop Codex command-sandbox preflight and fresh-source synthetic baseline, with no model turn.
 - Actual installed-producer report received and schema-validated in the laptop inbox; nightly service succeeded.
