@@ -657,6 +657,17 @@ hour and is revoked when work continues or is cancelled. Preview links are for h
 listener exposes no job API. External resources, network requests and form submissions are blocked by its content
 policy. Backend servers and automatic browser testing are outside this initial preview implementation.
 
+### Bug reports and feature requests
+
+When private reliability storage is configured, registered users can send `/bug <description>` or
+`/feature <description>` in a DM or group, or reply to a message with either command. The exact general
+wording is previewed privately and needs the author's yes before Codex review or potential public PR use.
+`/feedback` shows your own queue; `/feedback withdraw <ID>` stops future sharing. `/feedback off` mutes
+proactive feature offers. `/help` includes `/mic` and the current role-aware command guide.
+
+[The feedback guide](docs/feedback-and-reliability.md) explains consent, storage, local-only technical checks
+and the broader nightly backlog. No archive scanning or extra model call is used for collection.
+
 ### Optional nightly operations
 
 [The host operations guide](docs/operations.md) describes encrypted Pi-to-laptop recovery backups, fixed synthetic

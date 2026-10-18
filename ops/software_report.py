@@ -10,7 +10,9 @@ from common import run
 
 PROBES = ('protocol_output', 'email_outcome', 'offer_followup', 'date_zero',
           'date_invalid', 'date_empty_remove', 'watch_completion', 'link_delivery', 'reminder_evidence')
-SUITE = 'software-probes-v1'
+LEGACY_PROBES = PROBES
+PROBES = (*PROBES, 'email_conditional_approval', 'draft_expiry', 'draft_restart')
+SUITE = 'software-probes-v2'
 
 
 def unique(pairs):
@@ -25,22 +27,23 @@ def unique(pairs):
 def validate(value):
     if type(value) is not dict or set(value) != {'schema', 'suite', 'results'}:
         raise ValueError('Unexpected software report fields')
-    if type(value['schema']) is not int or value['schema'] != 1 or value['suite'] != SUITE:
+    if type(value['schema']) is not int or value['schema'] != 1 or value['suite'] not in (SUITE, 'software-probes-v1'):
         raise ValueError('Unsupported software report')
+    probes = LEGACY_PROBES if value['suite']=='software-probes-v1' else PROBES
     rows = value['results']
-    if type(rows) is not list or len(rows) != len(PROBES):
+    if type(rows) is not list or len(rows) != len(probes):
         raise ValueError('Incomplete software suite')
     found = {}
     for row in rows:
         if type(row) is not dict or set(row) != {'probe', 'result'}:
             raise ValueError('Unexpected probe fields')
         probe, result = row['probe'], row['result']
-        if type(probe) is not str or probe not in PROBES or probe in found:
+        if type(probe) is not str or probe not in probes or probe in found:
             raise ValueError('Unexpected or duplicate probe')
         if type(result) is not str or result not in ('pass', 'fail', 'unsupported'):
             raise ValueError('Unexpected probe result')
         found[probe] = result
-    return {'schema': 1, 'suite': SUITE, 'results': [{'probe': p, 'result': found[p]} for p in PROBES]}
+    return {'schema': 1, 'suite': value['suite'], 'results': [{'probe': p, 'result': found[p]} for p in probes]}
 
 
 def loads(text):

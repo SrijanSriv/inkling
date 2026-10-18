@@ -41,9 +41,17 @@ try:
  s=socket.socket(); s.settimeout(1)
  assert s.connect_ex(('127.0.0.1',8100)) != 0, 'network visible'
 except PermissionError: pass
-print('isolated')`, c.backup_password, c.github_token, c.checkout, path.join(c.state,'inbox'), configFile, c.codex_auth, path.join(runtime,'auth.json'), path.join(c.state,'backups','config')] });
+print('isolated')`, c.backup_password, c.github_token, c.checkout, path.join(c.state,'inbox'), path.join(c.state,'feedback-inbox'), configFile, c.codex_auth, path.join(runtime,'auth.json'), path.join(c.state,'backups','config')] });
   if (probe.exitCode !== 0 || !String(probe.stdout).includes('isolated')) throw new Error('Review sandbox preflight failed');
-  const schema = { type:'object', properties:{ title:{type:'string'}, summary:{type:'string'}, body:{type:'string'}, advice:{type:'array',items:{type:'string'}} },required:['title','summary','body','advice'],additionalProperties:false };
+  const strings = {type:'array',items:{type:'string'}};
+  const reference = {type:'object',properties:{path:{type:'string'},line:{type:'integer'}},required:['path','line'],additionalProperties:false};
+  const outcome = states => ({type:'object',properties:{id:{type:'string'},state:{type:'string',enum:states},note:{type:'string'}},required:['id','state','note'],additionalProperties:false});
+  const ledger = {type:'object',properties:{sources:strings,problem:{type:'string'},before:{type:'string'},change:{type:'string'},verification:{type:'string'},limitations:{type:'string'},beforeRefs:{type:'array',items:reference},afterRefs:{type:'array',items:reference}},
+    required:['sources','problem','before','change','verification','limitations','beforeRefs','afterRefs'],additionalProperties:false};
+  const schema = {type:'object',properties:{title:{type:'string'},summary:{type:'string'},body:{type:'string'},advice:strings,deferred:strings,
+    targetOutcomes:{type:'array',items:outcome(['proposed','no_issue','deferred'])},
+    requestOutcomes:{type:'array',items:outcome(['proposed','needs_info','deferred'])},issueLedger:{type:'array',items:ledger}},
+    required:['title','summary','body','advice','deferred','requestOutcomes','targetOutcomes','issueLedger'],additionalProperties:false};
   const thread = await rpc.call('thread/start', { cwd:workspace, ephemeral:true, approvalPolicy:'never',
     config:{shell_environment_policy:{inherit:'none',set:env}},
     developerInstructions:instructions });
@@ -52,6 +60,7 @@ print('isolated')`, c.backup_password, c.github_token, c.checkout, path.join(c.s
   const suiteRoot = path.join(workspace,'.tmp','audit-suite');
   fs.mkdirSync(suiteRoot,{recursive:true});
   const suiteText = fs.readFileSync(new URL('./probes/software-probes.mjs',import.meta.url),'utf8');
+  if(fs.readFileSync(path.join(workspace,'ops/probes/software-probes.mjs'),'utf8')!==suiteText)throw new Error('Trusted suite differs from public source; operator update required');
   fs.writeFileSync(path.join(suiteRoot,'software-probes.mjs'),suiteText);
   async function softwareChecks() {
     // Create, write and remove scratch only INSIDE the sandbox. Model-created symlinks must

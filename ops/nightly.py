@@ -9,6 +9,7 @@ import time
 from zoneinfo import ZoneInfo
 from common import atomic, config, entrypoint, lock, notify, read, restic, run
 from software_report import collect, load
+import feedback_report
 
 
 def inventory(root):
@@ -81,6 +82,26 @@ def transfer(c):
     run(['rsync', '-az', '--delete-delay', '--rsync-path', remote_rsync,
          '-e', 'ssh -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=3',
          c['backup_repository']+'/', host+':'+remote+'/backups/'], timeout=1800)
+    # Explicitly approved wording is a separate lane. Never mix local issue counts or chat excerpts into it.
+    try:
+        feedback = feedback_report.collect(c)
+        feedback_day = dt.datetime.now(ZoneInfo(c.get('timezone','UTC'))).date().isoformat()
+        remote_feedback = remote+'/feedback-inbox/'+feedback_day+'.json'
+        out = Path(c['state'])/'feedback-outbox'/'approved.json'
+        atomic(out, feedback)
+        run(['ssh','-o','BatchMode=yes','-o','ConnectTimeout=10',host,'mkdir -p '+shlex.quote(remote+'/feedback-inbox')+' && chmod 700 '+shlex.quote(remote+'/feedback-inbox')])
+        run(['scp','-q','-o','BatchMode=yes','-o','ConnectTimeout=10',out,host+':'+remote_feedback+'.tmp'])
+        run(['ssh','-o','BatchMode=yes','-o','ConnectTimeout=10',host,'mv '+shlex.quote(remote_feedback+'.tmp')+' '+shlex.quote(remote_feedback)])
+        received = run(['ssh','-o','BatchMode=yes','-o','ConnectTimeout=10',host,
+            'python3 -c '+shlex.quote('import pathlib; p=pathlib.Path('+repr(remote+'/feedback-receipts.json')+'); print(p.read_text() if p.exists() and p.stat().st_size<30000 else "[]")')])
+        run([c['node'],'--env-file=.env','--import','tsx','src/feedback-export.ts','--receipts'],cwd=c['checkout'],data=received.stdout,timeout=30)
+        atomic(Path(c['state'])/'feedback-transfer.json',{'ok':True,'at':dt.datetime.now(dt.timezone.utc).isoformat()})
+    except Exception:
+        # A failed consented handoff never falls back to raw content or prevents the encrypted backup.
+        atomic(Path(c['state'])/'feedback-transfer.json',{'ok':False,'at':dt.datetime.now(dt.timezone.utc).isoformat()})
+        try: notify(c,'feedback-handoff-'+dt.datetime.now(dt.timezone.utc).date().isoformat(),'Approved improvement requests or their status receipts could not be transferred. Backups and synthetic checks continue; no private-log fallback was used. The handoff will retry.')
+        except Exception: pass
+        print('Approved feedback handoff unavailable; backup and fixed checks continue.',flush=True)
     for p in sorted((Path(c['state'])/'software-reports').glob('*.json')):
         load(p)  # Reject extra fields, legacy diagnostics and malformed reports before any transfer.
         # Publish each strictly validated software report atomically after the backup transfer is complete.

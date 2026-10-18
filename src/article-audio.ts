@@ -1,3 +1,4 @@
+import { recordIssue } from "./reliability-store.js";
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { z } from 'zod';
@@ -95,7 +96,7 @@ export class ArticleAudio {
    const note=`English voice walkthrough: ${narration.title}\n${receipt.url}${article.coverage==='partial'?'\nThis covers only the accessible portion of the article.':''}`;
    appendHistory(chat,[{role:'assistant',content:note}]);await delivery.send(note);
   }catch{
-   if(receipt.state!=='sent'){receipt.state=deliveryStarted?'uncertain':'failed';save();if(await delivery.allowed().catch(()=>false))await delivery.send(deliveryStarted?'I couldn’t confirm that the voice note arrived. Please check this chat before asking me to send it again.':'I couldn’t finish that voice walkthrough. The article may be inaccessible, or the local voice service may be busy. No complete voice note was sent; you can ask me to try again.').catch(()=>{});}
+   if(receipt.state!=='sent'){receipt.state=deliveryStarted?'uncertain':'failed';recordIssue(chat,deliveryStarted?'article_uncertain':'article_failed');save();if(await delivery.allowed().catch(()=>false))await delivery.send(deliveryStarted?'I couldn’t confirm that the voice note arrived. Please check this chat before asking me to send it again.':'I couldn’t finish that voice walkthrough. The article may be inaccessible, or the local voice service may be busy. No complete voice note was sent; you can ask me to try again.').catch(()=>{});}
    log.warn({outcome:receipt.state==='sent'?'caption_failed':'failed'},'article voice walkthrough');
   }finally{audio?.fill(0);}
  }

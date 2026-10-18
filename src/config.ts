@@ -26,6 +26,8 @@ export const config = {
   // Model names (on Azure, deployment names; by default a deployment is named after its model).
   model: process.env.INKLING_MODEL ?? (provider === "gemini" ? "gemini-3.5-flash-lite" : provider === "anthropic" ? "claude-opus-5-5" : "gpt-5-mini"),
   transcribeModel: process.env.INKLING_TRANSCRIBE_MODEL ?? "gpt-4o-transcribe",
+  reliabilityDir: process.env.INKLING_RELIABILITY_DIR || undefined,
+  reliabilityKeyFile: process.env.INKLING_RELIABILITY_KEY_FILE || undefined,
   backgroundReasoning: process.env.INKLING_BACKGROUND_REASONING === "true",
   articleVoice: process.env.INKLING_ARTICLE_VOICE === "true",
   whisperUrl: process.env.INKLING_WHISPER_URL || undefined,

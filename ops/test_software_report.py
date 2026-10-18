@@ -11,7 +11,7 @@ from software_report import PROBES, fixture, from_stdout, loads, validate
 
 
 def report():
-    return {'schema': 1, 'suite': 'software-probes-v1',
+    return {'schema': 1, 'suite': 'software-probes-v2',
             'results': [{'probe': p, 'result': 'fail'} for p in PROBES]}
 
 

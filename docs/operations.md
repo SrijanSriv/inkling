@@ -20,11 +20,15 @@ usage allowance. GitHub Pages is unrelated to these private backups.
   Restic metadata is checked daily and all repository data on Sundays. Retention is 30 daily, 8 weekly and 12 monthly
   recovery points. Pruning follows a successful restore check. The laptop mirror is guarded by `backup.lock`;
   its completion marker is written only after a successful transfer.
-- A separate fixed software report runs all nine public synthetic probes every night. The Pi uses Bubblewrap
+- A separate fixed software report runs all twelve public synthetic probes every night. The Pi uses Bubblewrap
   filesystem, PID and network namespaces with committed source and disposable fake data. It has no home,
   production data, credentials, inherited provider keys or journal mount. Neither actual chat events nor
   operational counts choose the cases. Exact schema validation rejects extra fields before transfer and again
   on the laptop. See [the payload and exact prompt](nightly-codex-payload.md).
+- Approved feedback is a separate, exact-schema lane: only individually previewed and approved descriptions,
+  random request IDs, kinds and withdrawals of previously approved IDs. It is published before its matching dated
+  software report; a missing dated snapshot never falls back to an earlier night's requests. Private local
+  candidates, quotes and counts are never added.
 - Legacy aggregate reports are no longer transferred. The laptop moves old/unrecognized inbox reports into
   private quarantine before any model work. They are not silently converted or used as fallback evidence.
 - The laptop fetches the configured public GitHub default branch before each new source review. Codex runs in
@@ -36,8 +40,10 @@ usage allowance. GitHub Pages is unrelated to these private backups.
 - The wrapper verifies typecheck and browser/coding syntax checks in that sandbox. Changes to `.github/`, `ops/`,
   instruction files, credentials and runtime data are refused. Change count/size, symlinks and obvious private
   information are checked before upload. The model has no GitHub token, backup password or deploy credentials.
-  A separate wrapper pushes `codex/nightly-YYYY-MM-DD` and opens a PR. It never merges. An existing maintenance
-  PR suppresses new code edits, preventing duplicate speculative PRs while you review.
+  A separate wrapper pushes `codex/nightly-YYYY-MM-DD` and opens a PR. It never merges. Open maintenance
+  PRs reserve their changed files; the wrapper rejects overlapping edits but permits unrelated improvements.
+  A separate author-approved feedback snapshot and a fixed public inspection backlog are included; local
+  technical case counts and private conversations remain excluded. See [the feedback guide](feedback-and-reliability.md).
 - Findings and usage advice are sent only to the configured owner's private WhatsApp chat. Backups, PR links,
   update successes and failures use the same encrypted, retryable local notification inbox. GitHub PR notifications
   also apply according to your GitHub preferences. Advice without a code change is kept in the private report and
@@ -95,7 +101,7 @@ package registries. The jobs do not need root. Keep configuration/state director
 Copy `ops/` and `coding/codex.mjs` into `~/.local/lib/inkling-ops/`, preserving their relative paths. This installed
 trusted wrapper is **not automatically replaced by model-generated PRs**. Changes to maintenance controls require
 manual installation after review. Include `ops/probes/`, `software_report.py`, `software-report.mjs` and
-`review-instructions.md`; copying only the old entry points is insufficient. Configure each host using `ops/pi.example.json` or `ops/laptop.example.json` at
+`review-instructions.md`, `review-targets.json`, `feedback_report.py`, `review_backlog.py` and `pr_ledger.py`; copying only the old entry points is insufficient. Configure each host using `ops/pi.example.json` or `ops/laptop.example.json` at
 `~/.config/inkling-ops/config.json`. All deployment identities and locations belong in private configuration.
 
 Generate a random Restic password outside the repository and put it at `backup_password` on both hosts. Keep a

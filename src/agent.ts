@@ -1,3 +1,4 @@
+import { recordIssue } from "./reliability-store.js";
 import { articleAudio, articleAudioEnabled, articleAudioTool, requestedArticleAudio } from "./article-audio.js";
 import { shoppingReplyNeedsEvidence, shoppingResultReply, shoppingErrorReply } from "./shopping-replies.js";
 import { householdCheckout } from "./household-checkout.js";
@@ -1222,6 +1223,7 @@ export async function respond(chat: Chat, batch: Incoming[], actions: ChatAction
             ? await runTool(chat, call, conversation, messages, actions, did, ack, images, turnStart, musicKey, !batch.some(m => m.text.startsWith("(automatic")), batch.at(-1)?.replyToId, microphoneTurn)
             : { type: "function_call_output" as const, call_id: call.call_id, output: "Error: That tool is not available to this sender in this chat." };
           const result = { name: call.name, output: typeof out.output === "string" ? out.output : JSON.stringify(out.output) };
+          if(toolFailed(result))recordIssue(chat.id,"tool_failed");
           toolResults.push(result);
           trackTool(turn, call.name, started, toolFailed(result));
           outputs.push(out);
@@ -1239,7 +1241,8 @@ export async function respond(chat: Chat, batch: Incoming[], actions: ChatAction
       }
       if (response.status === "incomplete") log.warn({ chat: chat.id, why: response.incomplete_details }, "reply cut short");
       const leakedStatus = stripToolStatusNotes(reply) !== reply;
-      reply = cleanToolReply(reply);
+      if(/declaration:|default_api|<\/?tool_call>/i.test(reply))recordIssue(chat.id,"protocol_reply");
+  reply = cleanToolReply(reply);
       const unfinished = isHoldingReply(reply) || (!reply && toolResults.length > 0 && !contentWasDelivered(did));
       const inventedReceipt = leakedStatus && !usedTools;
       unverifiedReceipt = inventedReceipt;
@@ -1279,11 +1282,13 @@ export async function respond(chat: Chat, batch: Incoming[], actions: ChatAction
     }
   }
 
+  if(/declaration:|default_api|<\/?tool_call>/i.test(reply))recordIssue(chat.id,"protocol_reply");
   reply = cleanToolReply(reply);
   if (compactVoice && /<\s*VOICE_TOOLS\s*>/i.test(reply)) {
     reply = toolReplyFallback(toolResults) || "I couldn't finish that request. Please ask again.";
   }
   const unsupportedClaim = unsupportedActionClaim(reply, toolResults);
+  if(unsupportedClaim)recordIssue(chat.id,"unsupported_claim");
   if (isHoldingReply(reply) || (!reply && toolResults.length > 0 && !contentWasDelivered(did)) || unverifiedReceipt ||
       unsupportedClaim || ((!usedTools || toolResults.some(toolFailed)) && CLAIMS_ACTION.test(reply))) {
     const fallback = toolReplyFallback(toolResults);

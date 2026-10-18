@@ -1,3 +1,7 @@
+import { feedbackBoundary, handleFeedback } from "./feedback.js";
+import { recordIssue, startReliabilityRetention } from "./reliability-store.js";
+import { commandHelp } from "./command-help.js";
+import { startCommandAnnouncements } from "./command-announcements.js";
 import { articleAudio, articleAudioEnabled, createArticleOffer, articleOfferFor, articleOfferYes, isArticleOfferId } from "./article-audio.js";
 import { shoppingErrorReply } from "./shopping-replies.js";
 import { householdCheckout, shoppingApprovalCandidate } from "./household-checkout.js";
@@ -50,6 +54,8 @@ function guest(msg: InboundMessage): User {
   return { id: `guest-${msg.phone ?? "unknown"}`, name: msg.senderName, phone: msg.phone ?? "", otherPhones: [], timezone: admin?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone, admin: false, owner: false };
 }
 
+const feedbackWords = (msg: InboundMessage) => (msg.typedText ?? msg.text).replace(new RegExp(`^\\s*(@\\S+|${nameCall().source})[\\s,:]*`, "i"), "").trim();
+
 const groupId = (chatJid: string) => `group-${chatJid.split("@")[0].replace(/[^a-z0-9-]/gi, "")}`;
 
 /** Someone on the list is in this group. Open-by-default only ever applies then, so a stranger can't add the assistant to their own group to skip the waiting list. */
@@ -91,6 +97,8 @@ function onMessage(msg: InboundMessage): void {
     // A duplicate or rate-limited workflow message must not fall through to ordinary dispatch.
     return;
   }
+
+  if (user && feedbackBoundary((msg.typedText ?? msg.text).replace(new RegExp(`^\\s*(@\\S+|${nameCall().source})[\\s,:]*`, "i"), ""), msg.replyToId)) return enqueue(msg, user);
 
   if (msg.group) {
     const context = () => {
@@ -177,6 +185,7 @@ async function handOver(): Promise<void> {
   log.info("a newer copy is starting: finishing replies in progress, then handing over WhatsApp");
   const until = Date.now() + 45_000;
   while ([...queues.values()].some((q) => q.busy) && Date.now() < until) await pause(500);
+  for(const [key,q] of queues)if(q.busy)recordIssue(key,"interrupted");
   releaseWhatsApp();
 }
 
@@ -205,12 +214,12 @@ async function drain(key: string, queue: { busy: boolean; pending: Queued[] }): 
           await sendReply(msg.chatJid, reply);
           if(articleAudioEnabled()&&reply.includes("\nSaved to "))await sendArticleOffer(key,msg.chatJid,msg.text.trim());
         }
-      } catch { log.warn({ chat: key }, "link workflow delivery failed"); }
+      } catch { recordIssue(key,"link_delivery_failed"); log.warn({ chat: key }, "link workflow delivery failed"); }
       finally { startedPending([msg]); }
       continue;
     }
-    const boundary = queue.pending.findIndex(item => item.workflow || isArticleOfferId(item.msg.replyToId) || item.msg.audioError || item.msg.source === "microphone" || shoppingApprovalCandidate(item.msg.typedText??item.msg.text));
-    const batch = queue.pending.splice(0, first.msg.source === "microphone" || isArticleOfferId(first.msg.replyToId) || shoppingApprovalCandidate(first.msg.typedText??first.msg.text) ? 1 : boundary < 0 ? queue.pending.length : boundary);
+    const boundary = queue.pending.findIndex(item => item.workflow || feedbackBoundary(feedbackWords(item.msg), item.msg.replyToId) || isArticleOfferId(item.msg.replyToId) || item.msg.audioError || item.msg.source === "microphone" || shoppingApprovalCandidate(item.msg.typedText??item.msg.text));
+    const batch = queue.pending.splice(0, first.msg.source === "microphone" || feedbackBoundary(feedbackWords(first.msg), first.msg.replyToId) || isArticleOfferId(first.msg.replyToId) || shoppingApprovalCandidate(first.msg.typedText??first.msg.text) ? 1 : boundary < 0 ? queue.pending.length : boundary);
     startedPending(batch.map((b) => b.msg));
     const { msg: last, user } = batch.at(-1)!;
     const { chatJid } = last;
@@ -236,6 +245,14 @@ async function drain(key: string, queue: { busy: boolean; pending: Queued[] }): 
       batch.length === 1
         ? last.text.replace(new RegExp(`^\\s*(@\\S+|${nameCall().source})[\\s,:]*`, "i"), "").trim().toLowerCase().replace(/\s+/g, " ")
         : "";
+    if (batch.length === 1 && last.source !== "microphone" && !isGuest(user)) {
+      const words = (last.typedText ?? last.text).replace(new RegExp(`^\\s*(@\\S+|${nameCall().source})[\\s,:]*`, "i"), "").trim();
+      try {
+        const handled = await handleFeedback({ actor:user.id, chat:key, text:words, id:last.key.id??"", at:last.at.getTime(), group:!!last.group, plain:last.plainText===true, forwarded:!!last.forwarded, replyToId:last.replyToId, quoteTopic:last.feedbackTopic },
+          async (text,id) => { const current=getUsers().find(u=>u.id===user.id); if(!current)throw new Error("Access changed"); await sendText(`${current.phone}@s.whatsapp.net`,text,id); },true);
+        if(handled) { if(last.group)await sendText(chatJid,"I've sent the feedback details privately. Nothing is shared with Codex without your approval there."); continue; }
+      } catch { if(feedbackBoundary(words,last.replyToId)){await sendText(chatJid,"The private feedback list is unavailable. Nothing was shared; please try again later.");continue;} }
+    }
     const shoppingWords=(last.typedText??last.text).replace(new RegExp(`^\\s*(@\\S+|${nameCall().source})[\\s,:]*`,"i"),"").trim();
     if(batch.length===1&&shoppingApprovalCandidate(shoppingWords)&&instamartEnabled()){
       try{
@@ -306,6 +323,7 @@ async function drain(key: string, queue: { busy: boolean; pending: Queued[] }): 
     } catch (err) {
       stopTyping();
       if(!answerReady&&last.source==="microphone"&&last.key.id)roomSpeech.cancelTurn(user.id,last.key.id);
+      recordIssue(chat.id,"reply_failed");
       log.error({ chat: chat.id, err }, "failed to respond");
       const limited = err && typeof err === "object" && "status" in err && err.status === 429;
       const failure = limited ? "My AI provider is limiting requests right now. Please try again later."
@@ -392,12 +410,12 @@ async function linkPersonal(user: User): Promise<void> {
 
 /** Runs a scheduled job (morning brief, dates, watches, travel) in a person's private chat or a group. */
 const runJob: RunJob = async (target, prompt) => {
-  if (!link.connected || handingOver) return;
+  if (!link.connected || handingOver) { recordIssue(target.kind === "person" ? target.user.id : target.chatId,"scheduled_skipped"); return; }
   const admin = getUsers().find((u) => u.admin) ?? getUsers()[0];
   const chatJid = target.kind === "person" ? `${target.user.phone}@s.whatsapp.net` : target.chatJid;
   const key = target.kind === "person" ? target.user.id : target.chatId;
   // Don't talk over a conversation that's in progress; the job runs again next time.
-  if (queues.get(key)?.busy) return;
+  if (queues.get(key)?.busy) { recordIssue(key,"scheduled_skipped"); return; }
   const queue = queues.get(key) ?? { busy: false, pending: [] };
   queues.set(key, queue);
   queue.busy = true;
@@ -407,6 +425,7 @@ const runJob: RunJob = async (target, prompt) => {
     const reply = await respond(chat, [{ text: prompt, images: [], at: new Date() }], chatActions(chat, chatJid));
     if (reply) await sendReply(chatJid, reply);
   } catch (err) {
+    recordIssue(key,"scheduled_failed");
     log.error({ chat: key, err }, "scheduled job failed");
   } finally {
     queue.busy = false;
@@ -465,16 +484,7 @@ async function runCommand(chat: Chat, chatJid: string, command: string): Promise
 
   switch (command) {
     case "/help":
-      return group
-        ? `Mention me (@${config.name}), reply to one of my messages, or start with "${config.name.toLowerCase()}" and I'll jump in.\n/memory: what I remember for this group\n/reset: start fresh here`
-        : [
-            "Just text me like you'd text a friend. A few commands:",
-            ...(googleConnectEnabled() ? ["/connect google: link Gmail, Calendar, Drive and Tasks (you can add several accounts)"] : []),
-            "/google: see which accounts are connected",
-            "/disconnect google: remove my access (add an email to remove just one)",
-            "/memory: see what I remember about you",
-            "/reset: start a fresh conversation",
-          ].join("\n");
+      return commandHelp(user,!!group);
     case "/reset":
       clearHistory(chat.id);
       resetTweetMemory(chat.id);
@@ -601,6 +611,8 @@ startMicrophone({
 const owner = getUsers().find((u) => u.owner);
 if (owner) startCodingNotifications(owner.id, notifyPerson(owner), () => link.connected);
 if (owner) startOperationNotifications(owner.id, notifyPerson(owner), () => link.connected);
+startCommandAnnouncements(() => link.connected && !handingOver, sendText);
+startReliabilityRetention();
 startMailReview({
   available: id => link.connected && !handingOver && !queues.get(id)?.busy && !queues.get(id)?.pending.length,
   exclusive: async (id, work) => {

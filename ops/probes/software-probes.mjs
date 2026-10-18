@@ -43,5 +43,14 @@ assert(prepared?.includes('A public synthetic summary.'));
 const retry=await links.runLinkWorkflow('audit','audit','synthetic-message','https://example.com/article',undefined,dependencies);
 record('link_delivery',typeof retry==='string'&&retry.includes('A public synthetic summary.'));
 record('reminder_evidence',!!replies.unsupportedActionClaim("I'll remind you tomorrow",[{name:'list_reminders',output:'No reminders set here.'}]));
+// Approval safety and restart durability, with a fake draft and no sending API.
+const drafts = await load('drafts.ts');
+record('email_conditional_approval',!drafts.mailApproval('yes, but change the subject'));
+record('draft_expiry',drafts.draftExpired({createdAt:Date.now()-31*60000}));
+drafts.drafts.set('audit',{kind:'email',to:'reader@example.com',name:'Reader',text:'Synthetic draft only.',createdAt:Date.now()});
+const {execFileSync}=await import('node:child_process');
+const recovered=execFileSync(process.execPath,['--import',path.join(root,'node_modules/tsx/dist/loader.mjs'),'--input-type=module','-e',
+  `const {drafts}=await import(${JSON.stringify(pathToFileURL(path.join(root,'src/drafts.ts')).href)});process.stdout.write(drafts.has('audit')?'yes':'no');`],{cwd:scratch,env:process.env,timeout:15000,encoding:'utf8'}).trim();
+record('draft_restart',recovered==='yes');
 // One fixed marker, consumed by the wrapper. Imported code may write synthetic logger events.
 console.log('AUDIT_PROBES='+JSON.stringify(result));

@@ -1,3 +1,4 @@
+import { feedbackBoundary, feedbackTopic, type Topic } from "./feedback.js";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -40,6 +41,8 @@ export type InboundMessage = Incoming & {
   /** Distinguishes actual text from media captions for opt-in bare-link rules. */
   plainText?: boolean;
   typedText?: string;
+  /** Only a fixed topic inferred locally; never retain or export quoted text. */
+  feedbackTopic?: Topic;
   forwarded?: boolean;
   /** Set for group chats. Normally answered when addressed; an enabled bare-link rule is a narrow exception. */
   group?: { addressed: boolean };
@@ -172,6 +175,7 @@ async function parse(socket: WASocket, m: WAMessage): Promise<InboundMessage | u
   const senderName = m.pushName ?? "someone";
 
   const ctx = content?.extendedTextMessage?.contextInfo ?? content?.imageMessage?.contextInfo ?? content?.audioMessage?.contextInfo;
+  const feedbackIntent = feedbackBoundary(text.replace(new RegExp(`^\\s*(@\\S+|${nameCall().source})[\\s,:]*`,"i"),""),ctx?.stanzaId??undefined);
   // Voice notes are heard first, even in groups: saying the name has to work like typing it, and what was said is
   // context like any other message.
   const audio = content?.audioMessage;
@@ -210,10 +214,10 @@ async function parse(socket: WASocket, m: WAMessage): Promise<InboundMessage | u
       spokenNameCall().test(spoken) ||
       (ctx?.mentionedJid ?? []).some((j) => me.has(jidNormalizedUser(j))) ||
       (!!ctx?.participant && me.has(jidNormalizedUser(ctx.participant)));
-    group = { addressed };
+    group = { addressed: addressed || !!person(phone) && feedbackIntent };
     // Messages not meant for the assistant are only kept as short-term context, so skip downloading anything else.
-    if (!addressed && audioError) return;
-    if (!addressed) return { chatJid, phone, senderName, key: m.key, at: new Date(), text: [spoken, text].filter(Boolean).join("\n"), images: [], group, plainText };
+    if (!group.addressed && audioError) return;
+    if (!group.addressed) return { chatJid, phone, senderName, key: m.key, at: new Date(), text: [spoken, text].filter(Boolean).join("\n"), images: [], group, plainText };
   }
   if (!phone) {
     log.warn({ chatJid }, "couldn't work out the sender's phone number");
@@ -229,7 +233,7 @@ async function parse(socket: WASocket, m: WAMessage): Promise<InboundMessage | u
   }
   // Replying to media with a message for the assistant: remember exactly which one, for "resend this".
   const quotedKind = ctx?.quotedMessage ? mediaKind(normalizeMessageContent(ctx.quotedMessage)) : undefined;
-  if (quotedKind && ctx?.stanzaId && ctx.quotedMessage) {
+  if (!feedbackIntent && quotedKind && ctx?.stanzaId && ctx.quotedMessage) {
     repliedTo.set(chatJid, { key: { remoteJid: chatJid, id: ctx.stanzaId, participant: ctx.participant ?? undefined, fromMe: false }, message: ctx.quotedMessage } as WAMessage);
   }
 
@@ -237,7 +241,7 @@ async function parse(socket: WASocket, m: WAMessage): Promise<InboundMessage | u
   let quotedNote = "";
   const quoted = ctx?.quotedMessage?.imageMessage;
   const quotedType = quoted?.mimetype?.split(";")[0];
-  if (!images.length && quoted && quotedType && IMAGE_TYPES.has(quotedType) && ctx?.stanzaId) {
+  if (!feedbackIntent && !images.length && quoted && quotedType && IMAGE_TYPES.has(quotedType) && ctx?.stanzaId) {
     try {
       const original = { key: { remoteJid: chatJid, id: ctx.stanzaId, participant: ctx.participant ?? undefined, fromMe: false }, message: { imageMessage: quoted } };
       const buffer = await downloadMediaMessage(original as WAMessage, "buffer", {}, { logger: baileysLog, reuploadRequest: socket.updateMediaMessage });
@@ -283,6 +287,7 @@ async function parse(socket: WASocket, m: WAMessage): Promise<InboundMessage | u
     key: m.key,
     at: new Date(Number(m.messageTimestamp ?? Date.now() / 1000) * 1000),
     replyToId: ctx?.stanzaId ?? undefined,
+    feedbackTopic: ctx?.quotedMessage ? feedbackTopic(normalizeMessageContent(ctx.quotedMessage)?.conversation ?? normalizeMessageContent(ctx.quotedMessage)?.extendedTextMessage?.text ?? "") : undefined,
     audioOrigin: !!audio,
     audioError,
     text: body || (images.length ? "" : "(sent something I can't open yet, like a sticker or file)"),

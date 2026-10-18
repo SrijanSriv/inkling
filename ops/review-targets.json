@@ -1,0 +1,12 @@
+[
+  {"id":"draft-restart","files":["src/drafts.ts","src/agent.ts"],"check":"Pending approvals live in an in-memory Map. Evaluate restart-safe encrypted drafts without allowing an old, unpreviewed or different person's yes to send anything."},
+  {"id":"scheduler-outcomes","files":["src/schedule.ts","src/watches.ts","src/index.ts"],"check":"Distinguish skipped, attempted, partial and completed scheduled work. Due work must not disappear before success; never blindly retry partially executed external actions."},
+  {"id":"article-recovery","files":["src/article-audio.ts"],"check":"Check working receipts from an earlier boot. Reconcile them honestly after restart without automatically resending possibly delivered audio."},
+  {"id":"article-followup","files":["src/article-audio.ts","src/agent.ts"],"check":"Check whether an existing encrypted narration script can ground later follow-up questions, scoped to the same chat and permitted sender."},
+  {"id":"link-delivery","files":["src/link-workflow.ts","src/index.ts"],"check":"List insertion is not WhatsApp delivery. Preserve prepared replies until successful delivery acknowledgement, with bounded restart recovery and source-ID deduplication."},
+  {"id":"mail-confirmation-routing","files":["src/agent.ts","src/drafts.ts"],"check":"Check that a pending email's plain yes can be handled without an unrelated coding worker being reachable, and never interpret an edited or conditional yes as approval."},
+  {"id":"reply-integrity","files":["src/tool-replies.ts","src/agent.ts"],"check":"Prevent model-written tool declarations and internal status receipts from reaching replies. Prepared, executed, delivered and uncertain outcomes must remain distinct."},
+  {"id":"date-validation","files":["src/dates.ts"],"check":"Check empty removal, real calendar dates, and preserving a zero-day offset. Do not overlap an existing date PR."},
+  {"id":"voice-link-lifetime","files":["src/microphone.ts"],"check":"Inspect expired or replaced microphone bearer links and reconnect errors. Improve the explanation and renewal path without making links permanent public credentials."},
+  {"id":"partial-content","files":["src/browse.ts","src/article-reader.ts","src/link-workflow.ts"],"check":"Inspect empty, blocked, partial or navigation-only content. Do not claim a complete source-grounded summary when usable article content was not obtained."}
+]

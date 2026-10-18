@@ -7,8 +7,12 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import time
 from common import atomic, entrypoint, laptop_notice, lock, read, run
 from software_report import load as load_software_report
+import feedback_report
+import review_backlog
+import pr_ledger
 
 
 def github(c, args):
@@ -38,6 +42,8 @@ def changed_files(work):
             raise RuntimeError('Invalid review path')
         if p.parts[0] in {'.github','ops','.git','.codex','.agents','data','node_modules','.tmp','.inkling','experiments'} or p.name in {'AGENTS.md','CLAUDE.md'} or p.name.startswith('.env'):
             raise RuntimeError('Protected review path')
+        if name in {'src/feedback.ts','src/feedback-export.ts','src/reliability-store.ts','src/command-announcements.ts'}:
+            raise RuntimeError('Protected privacy or announcement control')
         if name.startswith(('scripts/inkling-nightly.', 'scripts/inkling-update.', 'scripts/inkling-review.', 'scripts/inkling-webhook.')):
             raise RuntimeError('Protected maintenance service')
         dest = work/p
@@ -89,6 +95,12 @@ def main(c):
         if existing:
             url = existing[0]['url']
             laptop_notice(c,review_notice_key(day,url),'Nightly review opened a PR for you: '+url+'\nReview and merge it when ready; it has not been deployed.')
+            staged=read(state/('review-feedback-'+day+'.json'),None)
+            if staged:
+                backlog=read(state/'feedback-backlog.json',{})
+                feedback_report.dispositions(staged['selected'],{'requestOutcomes':staged['outcomes']})
+                atomic(state/'feedback-receipts.json',feedback_report.finish(backlog,staged['outcomes'],day,url))
+                atomic(state/'feedback-backlog.json',backlog)
             receipts[day] = {'pr': url}
             atomic(state/'review-state.json',receipts)
             return
@@ -98,6 +110,20 @@ def main(c):
             return
         opens = json.loads(github(c,['pr','list','--repo',c['repository'],'--state','open','--json','headRefName,title,url']).stdout)
         maintenance = [p for p in opens if p['headRefName'].startswith('codex/nightly-')]
+        if len(maintenance)>10: raise RuntimeError('Too many outstanding maintenance PRs')
+        reserved = set()
+        for pr in maintenance:
+            details=json.loads(github(c,['pr','view',pr['url'],'--repo',c['repository'],'--json','files']).stdout)
+            paths=[f['path'] for f in details['files']]
+            if len(paths)>100: raise RuntimeError('Oversized maintenance PR')
+            pr['files']=paths;reserved.update(paths)
+        feedback_file=state/'feedback-inbox'/(day+'.json')
+        feedback_backlog=read(state/'feedback-backlog.json',{})
+        # No stale consented snapshot fallback across nights. Missing input leaves backlog intact.
+        latest_feedback=max((p.name for p in (state/'feedback-inbox').glob('????-??-??.json')),default='')
+        fresh=feedback_file.exists() and feedback_file.name==latest_feedback and time.time()-feedback_file.stat().st_mtime<3600
+        selected=feedback_report.select(feedback_report.load(feedback_file),feedback_backlog,day) if fresh else []
+        atomic(state/'feedback-backlog.json',feedback_backlog)
         root = Path(c['checkout'])
         if not (root/'.git').exists():
             run(['git','clone','--origin','origin','https://github.com/'+c['repository']+'.git',root],timeout=180)
@@ -113,7 +139,9 @@ def main(c):
         env = dict(os.environ, PATH=c['tool_path'])
         run(['npm','ci','--ignore-scripts','--no-audit','--no-fund'],cwd=work,env=env,timeout=300)
         context = state/'review-context.json'
-        atomic(context,{'openMaintenancePRs':maintenance,'instruction':'If a maintenance PR is already open, do not modify any files. Report only new, supported advice; avoid duplicate fixes.' if maintenance else 'No maintenance PR is open.'})
+        targets=json.loads(Path(__file__).with_name('review-targets.json').read_text())
+        atomic(context,{'openMaintenancePRs':maintenance,'reservedFiles':sorted(reserved),'approvedFeedback':selected,
+            'publicReviewTargets':targets,'publicBacklog':review_backlog.public_context(read(state/'software-backlog.json',{}),targets),'instruction':'Review all failed probe families, public inspection targets and approved requests. Address several justified, non-overlapping issues where safe. Never edit reservedFiles or privacy controls; leave unrelated open PRs for human review.'})
         output = state/'review-result.json'
         output.unlink(missing_ok=True)
         attempts[day] = attempts.get(day, 0)+1
@@ -125,16 +153,31 @@ def main(c):
             if not isinstance(result.get(field),str):
                 raise RuntimeError('Invalid review result')
             safe_public(result[field])
+        if len(result['title'])>100 or len(result['summary'])>1000 or len(result['body'])>6000: raise RuntimeError('Review prose is oversized')
         advice = result.get('advice',[])
         if not isinstance(advice,list) or len(advice)>3 or any(not isinstance(a,str) or len(a)>1000 for a in advice):
             raise RuntimeError('Invalid review advice')
         for a in advice:
             safe_public(a)
+        review_context=read(context,{})
+        baseline=read(state/'last-software-review-input.json',{})['current']
+        pi_report=load_software_report(report)
+        outcomes=feedback_report.dispositions(selected,result)
+        for row in outcomes: safe_public(row['note'])
+        deferred=result.get('deferred',[])
+        if not isinstance(deferred,list) or len(deferred)>12 or any(not isinstance(x,str) or len(x)>500 for x in deferred):
+            raise RuntimeError('Invalid deferred findings')
+        for text in deferred: safe_public(text)
         names = changed_files(work)
+        inspection_rows=review_backlog.target_outcomes(targets,result,names)
+        for row in inspection_rows: safe_public(row['note'])
+        pr_ledger.validate(review_context,result,names,work,safe_public)
+        if reserved.intersection(names): raise RuntimeError('Review overlaps an open maintenance PR')
+        if not names and any(r['state']=='proposed' for r in outcomes): raise RuntimeError('No implementation for proposed feedback')
+        atomic(state/('review-feedback-'+day+'.json'),{'selected':selected,'outcomes':outcomes})
         url = None
         if names:
-            if maintenance:
-                raise RuntimeError('A maintenance PR is already open')
+            base_sha=run(['git','rev-parse','HEAD'],cwd=work).stdout.strip()
             if not result.get('typecheckPassed') or len(result['title'])>100 or len(result['body'])>6000:
                 raise RuntimeError('Review validation failed')
             run(['git','checkout','-b',branch],cwd=work)
@@ -154,13 +197,27 @@ def main(c):
             # A GitHub token is sent only to this configured repository on github.com.
             run(['git','-c','credential.helper=','push','https://github.com/'+c['repository']+'.git','HEAD:refs/heads/'+branch],cwd=work,env=publish_env,timeout=180)
             body = state/'pr-body.md'
-            body.write_text(result['body']+'\n\nValidation: `npm run typecheck` and browser/coding JavaScript syntax checks passed in the offline sandbox.\n\nAutomated nightly review using a fixed public synthetic software suite only. No private messages, mailbox data or credentials were provided. Human review and merge are required; this job cannot deploy.\n')
+            after_sha=run(['git','rev-parse','HEAD'],cwd=work).stdout.strip()
+            ledger_body=pr_ledger.render(review_context,result,base_sha,after_sha,c['repository'],baseline,pi_report)
+            safe_public(ledger_body)
+            body.write_text(ledger_body)
             url = github(c,['pr','create','--repo',c['repository'],'--base',c['branch'],'--head',branch,'--title',result['title'],'--body-file',str(body)]).stdout.strip()
+        feedback_receipts=feedback_report.finish(feedback_backlog,outcomes,day,url)
+        atomic(state/'feedback-backlog.json',feedback_backlog)
+        atomic(state/'feedback-receipts.json',feedback_receipts)
+        if result.get('softwareChecks'):
+            baseline=read(state/'last-software-review-input.json',{})['current']
+            revision=run(['git','rev-parse',base],cwd=root).stdout.strip()
+            atomic(state/'software-backlog.json',review_backlog.update(read(state/'software-backlog.json',{}),baseline,result['softwareChecks'],targets,inspection_rows,reserved,day,revision,url))
         message = ('Nightly review opened a PR: '+url+'\n'+result['summary']+'\nReview and merge it when ready; it has not been deployed.') if url else ('Nightly review finished. No code changes proposed. '+result['summary'])
+        if url:
+            message += '\nEvidence ledger highlights (complete trace in PR):\n'+pr_ledger.notice_rows(result)+'\nFull before/after code, test results and privacy disclosure are in the PR.'
+        if deferred:
+            message += '\nStill queued: '+' '.join(deferred[:3])
         if advice:
             message += '\nUsage advice: '+' '.join(advice)
         laptop_notice(c,review_notice_key(day,url),message[:5500])
-        receipts[day]={'pr':url,'at':dt.datetime.now(dt.timezone.utc).isoformat(),'summary':result['summary'],'advice':advice}
+        receipts[day]={'pr':url,'at':dt.datetime.now(dt.timezone.utc).isoformat(),'summary':result['summary'],'advice':advice,'deferred':deferred}
         atomic(state/'review-state.json',receipts)
         shutil.rmtree(work,ignore_errors=True)
         print('Nightly source review completed.',flush=True)
