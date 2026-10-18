@@ -43,6 +43,14 @@ export const dateTools: OpenAI.Responses.FunctionTool[] = [
 
 const monthDay = (d: string) => d.slice(-5);
 
+function validDate(date: string): boolean {
+  if (!/^(\d{4}-)?\d{2}-\d{2}$/.test(date)) return false;
+  // A yearless date may be February 29, even when this year is not a leap year.
+  const full = date.length === 5 ? `2000-${date}` : date;
+  const parsed = new Date(`${full}T12:00:00Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === full;
+}
+
 /** Days from `today` ("YYYY-MM-DD") until the next occurrence of a "MM-DD". */
 function daysUntil(md: string, today: string): number {
   const year = Number(today.slice(0, 4));
@@ -58,10 +66,13 @@ export function handleDate(name: string, args: Record<string, unknown>, chatId: 
   switch (name) {
     case "date_add": {
       const date = String(args.date);
-      if (!/^(\d{4}-)?\d{2}-\d{2}$/.test(date)) return 'Date must be "MM-DD" or "YYYY-MM-DD".';
-      const what = String(args.what).trim();
+      if (!validDate(date)) return 'Date must be a valid "MM-DD" or "YYYY-MM-DD".';
+      const what = String(args.what ?? "").trim();
+      if (!what) return "Say which date to remember.";
+      const days = Number(args.remind_days_before ?? 3);
+      if (!Number.isInteger(days)) return "Reminder days must be a whole number.";
       const rest = all.filter((d) => d.what.toLowerCase() !== what.toLowerCase());
-      writeSealedJson(file(chatId), [...rest, { what, date, remindDaysBefore: Math.min(Math.max(Number(args.remind_days_before) || 3, 0), 30), sent: [] }]);
+      writeSealedJson(file(chatId), [...rest, { what, date, remindDaysBefore: Math.min(Math.max(days, 0), 30), sent: [] }]);
       return `Saved. It's in ${daysUntil(monthDay(date), today)} days.`;
     }
     case "date_list":
@@ -73,7 +84,8 @@ export function handleDate(name: string, args: Record<string, unknown>, chatId: 
             .join("\n")
         : "No dates saved.";
     case "date_remove": {
-      const what = String(args.what).toLowerCase();
+      const what = String(args.what ?? "").trim().toLowerCase();
+      if (!what) return "Say which remembered date to remove.";
       const left = all.filter((d) => !d.what.toLowerCase().includes(what));
       writeSealedJson(file(chatId), left);
       return `Removed ${all.length - left.length}.`;
