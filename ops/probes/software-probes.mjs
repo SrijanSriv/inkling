@@ -48,9 +48,9 @@ const drafts = await load('drafts.ts');
 record('email_conditional_approval',!drafts.mailApproval('yes, but change the subject'));
 record('draft_expiry',drafts.draftExpired({createdAt:Date.now()-31*60000}));
 drafts.drafts.set('audit',{kind:'email',to:'reader@example.com',name:'Reader',text:'Synthetic draft only.',createdAt:Date.now()});
-const {execFileSync}=await import('node:child_process');
-const recovered=execFileSync(process.execPath,['--import',path.join(root,'node_modules/tsx/dist/loader.mjs'),'--input-type=module','-e',
-  `const {drafts}=await import(${JSON.stringify(pathToFileURL(path.join(root,'src/drafts.ts')).href)});process.stdout.write(drafts.has('audit')?'yes':'no');`],{cwd:scratch,env:process.env,timeout:15000,encoding:'utf8'}).trim();
+const {execFile}=await import('node:child_process');
+const recovered=(await new Promise((resolve,reject)=>execFile(process.execPath,['--import',path.join(root,'node_modules/tsx/dist/loader.mjs'),'--input-type=module','-e',
+  `const {drafts}=await import(${JSON.stringify(pathToFileURL(path.join(root,'src/drafts.ts')).href)});process.stdout.write(drafts.has('audit')?'yes':'no');`],{cwd:scratch,env:process.env,timeout:15000,encoding:'utf8'},(error,stdout)=>error?reject(error):resolve(stdout)))).trim();
 record('draft_restart',recovered==='yes');
 // One fixed marker, consumed by the wrapper. Imported code may write synthetic logger events.
 console.log('AUDIT_PROBES='+JSON.stringify(result));
