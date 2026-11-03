@@ -13,6 +13,7 @@ from software_report import load as load_software_report
 import feedback_report
 import review_backlog
 import pr_ledger
+from review_health import ReviewBlocked, newest_pending, progress, tracking
 
 
 def github(c, args):
@@ -73,22 +74,51 @@ def review_notice_key(day, url):
     return 'review-'+day+('-'+hashlib.sha256(url.encode()).hexdigest()[:12] if url else '')
 
 
+
+def publish_branch(c, work, env, branch, day):
+    # A PR-create/network failure may leave our branch behind. Only replace a commit that this
+    # trusted publisher recorded for this exact night, with an exact lease against human races.
+    state=Path(c['state']); marker=state/('review-branch-'+day+'.json')
+    known=read(marker,[])
+    if type(known) is not list or len(known)>3 or any(type(x) is not str or not re.fullmatch(r'[0-9a-f]{40}',x) for x in known):
+        raise RuntimeError('Invalid publication recovery record')
+    sha=run(['git','rev-parse','HEAD'],cwd=work).stdout.strip()
+    destination='https://github.com/'+c['repository']+'.git';ref='refs/heads/'+branch
+    remote=run(['git','-c','credential.helper=','ls-remote',destination,ref],cwd=work,env=env,timeout=120).stdout.strip()
+    head=None
+    if remote:
+        parts=remote.split()
+        if len(parts)!=2 or parts[1]!=ref or not re.fullmatch(r'[0-9a-f]{40}',parts[0]): raise RuntimeError('Invalid remote publication reference')
+        head=parts[0]
+        if head not in known: raise RuntimeError('Maintenance branch has an unrecognized commit; preserve it for review')
+    if sha not in known: atomic(marker,[*known,sha][-3:])
+    if head==sha: return
+    lease=['--force-with-lease='+ref+':'+head] if head else []
+    run(['git','-c','credential.helper=','push',*lease,destination,'HEAD:'+ref],cwd=work,env=env,timeout=180)
+
+
 def main(c):
     state = Path(c['state'])
-    with lock(state/'review.lock'):
+    with lock(state/'review.lock'), tracking(state):
         quarantine_legacy(state)
         receipts = read(state/'review-state.json', {})
-        pending = sorted(p for p in (state/'inbox').glob('*.json') if p.stem not in receipts)
-        if not pending:
+        report, superseded = newest_pending((state/'inbox').glob('*.json'), receipts)
+        if report is None:
+            progress(state,'queue',status='idle')
             return
+        progress(state,'credentials',day=report.stem)
         # Don't consume a night or start costly work while publishing credentials are absent.
         if not Path(c['github_token']).is_file():
             print('Review waiting for repository-scoped GitHub credential.', flush=True)
-            return
-        report = pending[0]
+            raise ReviewBlocked('Missing publishing credential')
         day = report.stem
         if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', day):
             raise RuntimeError('Invalid report date')
+        # Supersede only fixed software reports. Fresh consented feedback is selected separately below.
+        for older in superseded:
+            receipts[older.stem]={'status':'superseded','by':day}
+        if superseded: atomic(state/'review-state.json',receipts)
+        progress(state,'github')
         branch = 'codex/nightly-'+day
         # Crash recovery: a previously published PR is the receipt, never open a duplicate.
         existing = json.loads(github(c,['pr','list','--repo',c['repository'],'--head',branch,'--state','all','--json','url']).stdout)
@@ -107,7 +137,7 @@ def main(c):
         attempts = read(state/'review-attempts.json', {})
         if attempts.get(day, 0) >= 3:
             laptop_notice(c, 'review-blocked-'+day, 'Nightly review for '+day+' stopped after three failed attempts. Your backups continue normally. Check the laptop review service before retrying.')
-            return
+            raise ReviewBlocked('Latest report exhausted its retry budget')
         opens = json.loads(github(c,['pr','list','--repo',c['repository'],'--state','open','--json','headRefName,title,url']).stdout)
         maintenance = [p for p in opens if p['headRefName'].startswith('codex/nightly-')]
         if len(maintenance)>10: raise RuntimeError('Too many outstanding maintenance PRs')
@@ -117,6 +147,7 @@ def main(c):
             paths=[f['path'] for f in details['files']]
             if len(paths)>100: raise RuntimeError('Oversized maintenance PR')
             pr['files']=paths;reserved.update(paths)
+        progress(state,'feedback')
         feedback_file=state/'feedback-inbox'/(day+'.json')
         feedback_backlog=read(state/'feedback-backlog.json',{})
         # No stale consented snapshot fallback across nights. Missing input leaves backlog intact.
@@ -124,6 +155,7 @@ def main(c):
         fresh=feedback_file.exists() and feedback_file.name==latest_feedback and time.time()-feedback_file.stat().st_mtime<3600
         selected=feedback_report.select(feedback_report.load(feedback_file),feedback_backlog,day) if fresh else []
         atomic(state/'feedback-backlog.json',feedback_backlog)
+        progress(state,'source')
         root = Path(c['checkout'])
         if not (root/'.git').exists():
             run(['git','clone','--origin','origin','https://github.com/'+c['repository']+'.git',root],timeout=180)
@@ -137,6 +169,7 @@ def main(c):
         run(['git','remote','remove','origin'],cwd=work)
         # Preparation is outside the model sandbox. No lifecycle scripts run on the host.
         env = dict(os.environ, PATH=c['tool_path'])
+        progress(state,'dependencies')
         run(['npm','ci','--ignore-scripts','--no-audit','--no-fund'],cwd=work,env=env,timeout=300)
         context = state/'review-context.json'
         targets=json.loads(Path(__file__).with_name('review-targets.json').read_text())
@@ -146,7 +179,10 @@ def main(c):
         output.unlink(missing_ok=True)
         attempts[day] = attempts.get(day, 0)+1
         atomic(state/'review-attempts.json', attempts)
+        (state/'review-worker-health.json').unlink(missing_ok=True)
+        progress(state,'worker')
         run([c['node'],Path(__file__).with_name('review.mjs'),os.environ.get('INKLING_OPS_CONFIG',Path.home()/'.config/inkling-ops/config.json'),work,report,output,context],env=env,timeout=1900)
+        progress(state,'validation')
         shutil.rmtree(work/'.tmp',ignore_errors=True)
         result = json.loads(output.read_text())
         for field in ['title','summary','body']:
@@ -177,6 +213,7 @@ def main(c):
         atomic(state/('review-feedback-'+day+'.json'),{'selected':selected,'outcomes':outcomes})
         url = None
         if names:
+            progress(state,'publication')
             base_sha=run(['git','rev-parse','HEAD'],cwd=work).stdout.strip()
             if not result.get('typecheckPassed') or len(result['title'])>100 or len(result['body'])>6000:
                 raise RuntimeError('Review validation failed')
@@ -194,14 +231,15 @@ def main(c):
             helper.write_text('#!/bin/sh\ncase "$1" in *Username*) printf "%s\\n" x-access-token;; *) cat "$INKLING_TOKEN_FILE";; esac\n')
             helper.chmod(0o700)
             publish_env = dict(env,GIT_ASKPASS=str(helper),GIT_TERMINAL_PROMPT='0',INKLING_TOKEN_FILE=c['github_token'])
-            # A GitHub token is sent only to this configured repository on github.com.
-            run(['git','-c','credential.helper=','push','https://github.com/'+c['repository']+'.git','HEAD:refs/heads/'+branch],cwd=work,env=publish_env,timeout=180)
             body = state/'pr-body.md'
             after_sha=run(['git','rev-parse','HEAD'],cwd=work).stdout.strip()
             ledger_body=pr_ledger.render(review_context,result,base_sha,after_sha,c['repository'],baseline,pi_report)
             safe_public(ledger_body)
             body.write_text(ledger_body)
+            # Validate the entire public ledger before publishing any branch.
+            publish_branch(c,work,publish_env,branch,day)
             url = github(c,['pr','create','--repo',c['repository'],'--base',c['branch'],'--head',branch,'--title',result['title'],'--body-file',str(body)]).stdout.strip()
+        progress(state,'receipts')
         feedback_receipts=feedback_report.finish(feedback_backlog,outcomes,day,url)
         atomic(state/'feedback-backlog.json',feedback_backlog)
         atomic(state/'feedback-receipts.json',feedback_receipts)
