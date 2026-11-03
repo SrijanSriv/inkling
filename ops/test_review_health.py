@@ -31,9 +31,9 @@ class Health(unittest.TestCase):
                 self.assertEqual(read(Path(root)/'review-health.json')['category'],expected)
     def test_server_errors_are_classified_without_raw_output(self):
         module=(Path(__file__).parent/'review-health.mjs').resolve().as_uri()
-        code='import {category,turnFailure} from '+json.dumps(module)+'; console.log(JSON.stringify([category("Usage limit reached private-canary"),category("invalid output schema private-canary"),turnFailure({method:"turn/completed",params:{turn:{status:"completed"}}})]));'
+        code='import {category,turnFailure} from '+json.dumps(module)+'; console.log(JSON.stringify([category("Usage limit reached private-canary"),category("invalid output schema private-canary"),category({codexErrorInfo:"usageLimitExceeded"}),turnFailure({method:"turn/completed",params:{turn:{status:"completed"}}})]));'
         result=subprocess.run(['node','--input-type=module','-e',code],capture_output=True,text=True,check=True)
-        self.assertEqual(json.loads(result.stdout),['quota','request_schema',None]);self.assertNotIn('private-canary',result.stdout)
+        self.assertEqual(json.loads(result.stdout),['quota','request_schema','quota',None]);self.assertNotIn('private-canary',result.stdout)
 
 class PublicationRecovery(unittest.TestCase):
     def test_only_our_recorded_commit_can_be_replaced_with_a_lease(self):

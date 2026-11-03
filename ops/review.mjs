@@ -18,13 +18,13 @@ function health(status, failed) {
   const temp = healthFile + '.tmp';
   fs.writeFileSync(temp, JSON.stringify(value), {mode:0o600}); fs.renameSync(temp,healthFile);
 }
-function phase(next) { stage = next; health('running'); }
+function phase(next) { stage = next; failureCategory = undefined; health('running'); }
 const completed = new Promise((resolve, reject) => { resolveTurn = resolve; rejectTurn = reject; });
 const rpc = new Codex({ bin: c.codex_bin, version: c.codex_version, auth: c.codex_auth,
   runtime, toolRoots: c.tool_roots, path: c.tool_path, webSearch: 'live', unit: 'inkling-nightly-codex' }, msg => {
   events = Math.min(1000000, events+1);
   const classified = turnFailure(msg);
-  if(classified) failureCategory = classified;
+  if(classified && (classified !== 'other' || !failureCategory)) failureCategory = classified;
   if (msg.id !== undefined && msg.method) {
     if (msg.method === 'item/permissions/requestApproval') rpc.answer(msg.id, { permissions: {}, scope: 'turn' });
     else if (msg.method.includes('requestApproval')) rpc.answer(msg.id, { decision: 'decline' });
@@ -126,6 +126,7 @@ process.chdir(_auditScratch);\n`;
   }
   health('completed');
 } catch(error) {
-  health('failed', failureCategory || category(error?.message));
+  const reason = category(error?.message);
+  health('failed', reason !== 'other' ? reason : failureCategory || 'other');
   throw new Error('Review worker failed; see closed health status');
 } finally { clearInterval(heartbeat); clearTimeout(timer); rpc.stop(); }
