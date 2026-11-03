@@ -2,7 +2,7 @@ import { feedbackBoundary, handleFeedback } from "./feedback.js";
 import { recordIssue, startReliabilityRetention } from "./reliability-store.js";
 import { commandHelp } from "./command-help.js";
 import { startCommandAnnouncements } from "./command-announcements.js";
-import { articleAudio, articleAudioEnabled, createArticleOffer, articleOfferFor, articleOfferYes, isArticleOfferId } from "./article-audio.js";
+import { articleAudio, articleAudioEnabled, createArticleOffer, articleOfferFor, articleOfferYes, articleOfferFollowup, isArticleOfferId } from "./article-audio.js";
 import { shoppingErrorReply } from "./shopping-replies.js";
 import { householdCheckout, shoppingApprovalCandidate } from "./household-checkout.js";
 import { instamartEnabled } from "./instamart.js";
@@ -232,6 +232,7 @@ async function drain(key: string, queue: { busy: boolean; pending: Queued[] }): 
     const chat: Chat = last.group ? await groupChat(key, chatJid, user) : { id: key, user };
     if (last.group) groupContext.delete(chatJid); // folded into this turn's saved history
 
+    let articleFollowup:string|undefined;
     if(batch.length===1&&isArticleOfferId(last.replyToId)&&articleOfferYes(last.typedText??last.text)){
       try{
         const offer=articleOfferFor(key,last.replyToId);
@@ -240,8 +241,10 @@ async function drain(key: string, queue: { busy: boolean; pending: Queued[] }): 
         const actions=chatActions(chat,chatJid,last.key);
         const note=await articleAudio.start(key,user.id,last.key.id!,offer.url,"",offer.url,{send:actions.send,voice:actions.sendVoice!,allowed:actions.articleVoiceAllowed!});
         if(note.startsWith("That voice"))await sendReply(chatJid,note);
+        articleFollowup=articleOfferFollowup(last.typedText??last.text);
+        if(articleFollowup)articleFollowup=`About this article: ${offer.url}\n${articleFollowup}`;
       }catch(error){await sendReply(chatJid,error instanceof Error?error.message:"I couldn’t start the voice walkthrough.");}
-      continue;
+      if(!articleFollowup)continue;
     }
 
     // In groups, commands come after the mention: "@inkling /memory" or "inkling /reset".
@@ -283,7 +286,7 @@ async function drain(key: string, queue: { busy: boolean; pending: Queued[] }): 
     const stopTyping = showTyping(chatJid);
     let answerReady=false;
     try {
-      const incoming: Incoming[] = batch.map(({ msg, user }) => ({ ...msg, requestId: msg.key.id || undefined, from: user.name }));
+      const incoming: Incoming[] = batch.map(({ msg, user }) => ({ ...msg, ...(articleFollowup ? {text:articleFollowup} : {}), requestId: msg.key.id || undefined, from: user.name }));
       const agentStarted = Date.now();
       const preparation=last.source==="microphone"&&!last.group&&last.key.id?roomSpeech.prepare(user.id,last.key.id):undefined;
       let articleOfferUrl:string|undefined;
