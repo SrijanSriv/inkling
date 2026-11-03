@@ -7,6 +7,13 @@ from common import atomic, read
 from review_health import newest_pending, tracking, progress, ReviewBlocked
 
 class Health(unittest.TestCase):
+    def test_public_inspection_targets_point_to_existing_source(self):
+        root=Path(__file__).resolve().parent.parent
+        targets=json.loads((root/'ops/review-targets.json').read_text())
+        for target in targets:
+            for name in target['files']:
+                with self.subTest(target=target['id'],path=name):self.assertTrue((root/name).is_file())
+
     def test_exhausted_old_day_cannot_block_newest_source(self):
         paths=[Path('2026-01-01.json'),Path('2026-01-02.json'),Path('2026-01-03.json')]
         newest,old=newest_pending(paths,{'2026-01-01':{'pr':'public'}})
