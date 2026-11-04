@@ -84,7 +84,9 @@ export function handleWatch(name: string, args: Record<string, unknown>, chatId:
     case "watch_update": {
       const w = all.find((x) => x.id === String(args.id).trim());
       if (!w) return "No watch with that id.";
-      w.state = String(args.state).slice(0, 500);
+      const state = typeof args.state === "string" ? args.state.trim() : "";
+      if (!state) return "Error: A watch check needs a factual summary before it can be marked complete.";
+      w.state = state.slice(0, 500);
       w.lastChecked = Date.now();
       writeSealedJson(file(chatId), all);
       return "Saved.";

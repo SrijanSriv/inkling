@@ -89,7 +89,10 @@ async function tick(run: RunJob): Promise<void> {
   }
 }
 
-const addHours = (hm: string, h: number) => `${String(Math.min(Number(hm.slice(0, 2)) + h, 23)).padStart(2, "0")}:${hm.slice(3)}`;
+// Cap at the end of this calendar day, not the same minute of hour 23.
+const addHours = (hm: string, h: number) => Number(hm.slice(0, 2)) + h >= 24
+  ? "24:00"
+  : `${String(Number(hm.slice(0, 2)) + h).padStart(2, "0")}:${hm.slice(3)}`;
 
 function briefPrompt(user: User): string {
   const parts = [
