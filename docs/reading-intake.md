@@ -107,21 +107,43 @@ main assistant, then restart them:
 - `INKLING_READING_SHARE_BY`: the registered owner ID authorizing these recurring public posts.
 - `INKLING_READING_SHARE_SINCE`: an ISO timestamp. Only articles read on/after activation qualify; no historical flood.
 
-For each eligible saved article, the worker creates a natural English summary from its public section notes.
-The final summary must contain exactly 50 whitespace-separated words, validated after whitespace/dash cleanup.
-The original article URL is appended by code. Partial reads carry a separate short disclosure. Extra generation
-cost is bounded to twice the daily reading limit in model calls, reserved persistently before each call; at most
-two calls per preparation attempt, three attempts total, with an hour between failed attempts. Preparation failure
-does not discard the reading note. Shares, preparation state and delivery receipts remain encrypted and backed up.
+Reading and sharing have independent budgets. `INKLING_READING_DAILY` still controls intake (default ten
+attempts); it cannot raise the number of group messages. `INKLING_READING_SHARE_DAILY` allows zero, one or two
+broadcast attempts per local calendar day, default two, with a hard ceiling of two in any rolling 24 hours.
+Zero pauses broadcasts while intake and personal reading memory continue. `INKLING_READING_SHARE_MIN_SCORE`
+can be nine or ten, default nine. Invalid settings stop sharing rather than bypassing the cap.
 
-The main assistant checks the outbox every 15 seconds while connected. Delivery is capped at one attempt per hour
-and the daily reading limit (default ten), including after downtime. An encrypted budget reserves each attempt
-before sending and preserves the hourly gap across midnight and restarts; upgrading also accounts for existing
-sent receipts. Failed or uncertain attempts consume this budget. Queued posts wait rather than arriving in a burst.
-The assistant waits when the group chat is busy, and
-rechecks the configured authorizer's owner registration and live group membership before sending. It sends as the
-assistant, not as a person's linked WhatsApp. Explicit recurring authorization replaces a per-article confirmation.
-No personal history, contacts, email, interest rationale or private memory is passed to the summary model or group.
+The worker uses the existing summary call as a selective editorial decision. It supplies only public article
+notes, configured reading-interest keywords and up to six recent public group summaries, never personal chats,
+mail or memory. The editor defaults to rejection and requires substantive evidence or ideas, a surprising or useful
+insight, strong relevance and a different central insight from recent posts. Routine news, hype, promotions and
+thin content do not qualify. A post needs an affirmative decision, a score at or above the configured threshold,
+and the fixed standout classification. The score is a model judgment, not a calibrated measure of quality; the
+volume and time limits are enforced by code. There is no minimum number of posts to fill.
+
+Only extracted article notes read within the last 48 hours qualify. Partial reads are kept in the library but not
+proactively broadcast. Old queued posts without the new editorial selection cannot send; fresh ones must be
+re-evaluated, while stale ones do not drain as a historical backlog. Rejection does not delete the reading note.
+Among ready candidates, higher scores take priority, then more recent reads. This ranks the ready pool, not future
+articles the assistant has not read yet.
+
+An accepted summary must contain exactly 50 whitespace-separated words, validated after whitespace/dash cleanup.
+The original URL is appended by code. The existing preparation-call budget remains twice the daily intake limit,
+reserved persistently before each call, with two calls per preparation attempt and at most three attempts an hour
+apart. A rejected editorial decision finishes immediately; it is not retried just to obtain a higher score.
+Shares, preparation state and delivery receipts remain encrypted and backed up.
+
+The main assistant checks the outbox every 15 seconds while connected. It sends only from **10:00 until 21:00**
+in `INKLING_READING_TIMEZONE`, or the authorizer's timezone when unset, and waits at least six hours between
+attempts. Time is rechecked after asynchronous permission checks. The encrypted attempt budget survives restarts,
+counts uncertain/failed sends, preserves the cooldown across midnight, and conservatively migrates the old budget
+and sent receipts. Downtime does not create a burst or a midnight reset loophole. If two posts already went out
+before upgrading, the new policy does not grant two additional posts.
+
+The assistant also waits when the group is busy, and rechecks the configured authorizer's owner registration and
+live group membership before sending. It sends as the assistant, not through a person's linked WhatsApp. Explicit
+recurring authorization replaces per-article confirmation. Quiet hours apply to these proactive article posts,
+not to a direct request for a link summary or other chat replies.
 
 Completed receipts suppress repeat posts. A stable WhatsApp message ID is attached to each post. If a process
 crashes mid-send or network acceptance is unknown, the receipt is held as `uncertain`, not blindly resent. This
@@ -149,3 +171,9 @@ links, no historical backfill, failure backoff, deduplication and uncertain-send
 WhatsApp recipients.
 
 Eight isolated delivery-limit checks also cover the hourly gap, persistent cooldown, daily cap and day rollover.
+
+Current selective-sharing regression check: `python3 -m unittest discover -s ops -p test_reading_sharing.py`.
+It drives the real encrypted outbox and budgets with synthetic notes, injected editorial decisions and callback-only
+transport. It covers caps independent of intake, rolling midnight limits, quiet-hour boundaries, cooldowns,
+uncertain sends, budget migration, legacy/stale queues, partial reads, editorial rejections, score ranking,
+permission denial, concurrent invocation and pause settings. It performs no network calls or real sends.
