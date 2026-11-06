@@ -4,15 +4,27 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { validateReport, probeOutput, reviewInput } from './software-report.mjs';
 import { Codex } from '../coding/codex.mjs';
+import { category, turnFailure } from './review-health.mjs';
 const [configFile, workspace, reportFile, resultFile, contextFile] = process.argv.slice(2);
 const evidence = validateReport(JSON.parse(fs.readFileSync(reportFile, 'utf8')));
 const instructions = fs.readFileSync(new URL('./review-instructions.md', import.meta.url), 'utf8');
 const c = JSON.parse(fs.readFileSync(configFile, 'utf8'));
 const runtime = path.join(c.state, 'codex-runtime');
-let last, resolveTurn, rejectTurn;
+let last, resolveTurn, rejectTurn, failureCategory, stage = 'starting', events = 0;
+const healthFile = path.join(c.state, 'review-worker-health.json');
+function health(status, failed) {
+  const value = {schema:1, status, stage, events, at:new Date().toISOString()};
+  if(failed) value.category = failed;
+  const temp = healthFile + '.tmp';
+  fs.writeFileSync(temp, JSON.stringify(value), {mode:0o600}); fs.renameSync(temp,healthFile);
+}
+function phase(next) { stage = next; failureCategory = undefined; health('running'); }
 const completed = new Promise((resolve, reject) => { resolveTurn = resolve; rejectTurn = reject; });
 const rpc = new Codex({ bin: c.codex_bin, version: c.codex_version, auth: c.codex_auth,
   runtime, toolRoots: c.tool_roots, path: c.tool_path, webSearch: 'live', unit: 'inkling-nightly-codex' }, msg => {
+  events = Math.min(1000000, events+1);
+  const classified = turnFailure(msg);
+  if(classified && (classified !== 'other' || !failureCategory)) failureCategory = classified;
   if (msg.id !== undefined && msg.method) {
     if (msg.method === 'item/permissions/requestApproval') rpc.answer(msg.id, { permissions: {}, scope: 'turn' });
     else if (msg.method.includes('requestApproval')) rpc.answer(msg.id, { decision: 'decline' });
@@ -27,9 +39,12 @@ const rpc = new Codex({ bin: c.codex_bin, version: c.codex_version, auth: c.code
 });
 // Avoid an unhandled rejection if startup fails before we await completion.
 completed.catch(() => {});
+const heartbeat = setInterval(() => health('running'), 15000);
 const timer = setTimeout(() => rejectTurn(new Error('Review exceeded 30 minutes')), 1_800_000);
 try {
+  phase('starting');
   await rpc.start(workspace);
+  phase('sandbox');
   const env = { HOME: path.join(workspace,'.tmp'), TMPDIR: path.join(workspace,'.tmp'), PATH: c.tool_path };
   const probe = await rpc.call('command/exec', { cwd: workspace, env, timeoutMs: 10000, outputBytesCap: 1000,
     command: ['/usr/bin/python3', '-c', `import pathlib,socket,sys
@@ -54,7 +69,7 @@ print('isolated')`, c.backup_password, c.github_token, c.checkout, path.join(c.s
     required:['title','summary','body','advice','deferred','requestOutcomes','targetOutcomes','issueLedger'],additionalProperties:false};
   const thread = await rpc.call('thread/start', { cwd:workspace, ephemeral:true, approvalPolicy:'never',
     config:{shell_environment_policy:{inherit:'none',set:env}},
-    developerInstructions:instructions });
+    developerInstructions:instructions }, 90000);
   const context = JSON.parse(fs.readFileSync(contextFile,'utf8'));
   // Trusted suite is copied into disposable scratch, never read from model-edited source.
   const suiteRoot = path.join(workspace,'.tmp','audit-suite');
@@ -75,6 +90,7 @@ process.chdir(_auditScratch);\n`;
     if(checked.exitCode!==0) throw new Error('Isolated software suite failed; raw output withheld');
     return probeOutput(checked.stdout);
   }
+  phase('baseline');
   const baseline = await softwareChecks();
   fs.writeFileSync(path.join(c.state,'last-software-review-input.json'),JSON.stringify({pi:evidence,current:baseline}),{mode:0o600});
   const prompt = reviewInput(evidence,baseline,context);
@@ -84,10 +100,13 @@ process.chdir(_auditScratch);\n`;
     fs.writeFileSync(resultFile,JSON.stringify({pi:evidence,current:baseline,modelStarted:false}),{mode:0o600});
     process.exitCode=0;
   } else {
+    phase('model');
     await rpc.call('turn/start',{threadId:thread.thread.id,cwd:workspace,approvalPolicy:'never',outputSchema:schema,
-      input:[{type:'text',text:prompt}]});
+      input:[{type:'text',text:prompt}]}, 120000);
     await completed;
     await rpc.call('thread/backgroundTerminals/clean',{threadId:thread.thread.id});
+    phase('validation');
+    if(typeof last !== 'string' || !last.trim()) throw new Error('Missing structured review result');
     const report = JSON.parse(last);
     const check = await rpc.call('command/exec',{cwd:workspace,env,timeoutMs:120000,outputBytesCap:3000,command:['npm','run','typecheck']},130000);
     report.typecheckPassed = check.exitCode === 0;
@@ -105,4 +124,9 @@ process.chdir(_auditScratch);\n`;
     report.softwareChecks = after;
     fs.writeFileSync(resultFile,JSON.stringify(report),{mode:0o600});
   }
-} finally { clearTimeout(timer); rpc.stop(); }
+  health('completed');
+} catch(error) {
+  const reason = category(error?.message);
+  health('failed', reason !== 'other' ? reason : failureCategory || 'other');
+  throw new Error('Review worker failed; see closed health status');
+} finally { clearInterval(heartbeat); clearTimeout(timer); rpc.stop(); }

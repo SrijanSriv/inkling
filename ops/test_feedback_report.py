@@ -34,13 +34,16 @@ class FeedbackReport(unittest.TestCase):
         self.assertEqual(f.select({**f.EMPTY,'withdrawn':[REQ['id']]},backlog,'2026-01-02'),[])
         self.assertEqual(backlog,{})
 
-    def exercise_review(self,overlap=False):
+    def exercise_review(self,overlap=False,stalled=False):
         with tempfile.TemporaryDirectory() as d:
             base=Path(d);root=base/'source';root.mkdir();state=base/'state';state.mkdir();(root/'src').mkdir()
             def git(*args):return real_run(['git',*args],cwd=root).stdout.strip()
             git('init','-q');(root/'package.json').write_text('{}');(root/'src/dates.ts').write_text('export const old = true;\n');git('add','.');git('-c','user.name=Test','-c','user.email=test@example.com','commit','-qm','fixture');sha=git('rev-parse','HEAD');git('update-ref','refs/remotes/origin/master',sha)
             atomic(state/'inbox/2026-01-01.json',{'schema':1,'suite':'software-probes-v1','results':[{'probe':p,'result':'fail'} for p in __import__('software_report').LEGACY_PROBES]})
             atomic(state/'feedback-inbox/2026-01-01.json',{**f.EMPTY,'requests':[REQ]})
+            if stalled:
+                atomic(state/'inbox/2025-12-31.json',json.loads((state/'inbox/2026-01-01.json').read_text()))
+                atomic(state/'review-attempts.json',{'2025-12-31':3})
             token=base/'token';token.write_text('not-a-real-token')
             c={'state':str(state),'checkout':str(root),'repository':'example/example','branch':'master','github_token':str(token),'node':'fake-node','tool_path':'/usr/bin:/bin'}
             def github(c,args):
@@ -50,7 +53,7 @@ class FeedbackReport(unittest.TestCase):
                 else:return subprocess.CompletedProcess(args,0,'https://github.com/example/example/pull/2','')
                 return subprocess.CompletedProcess(args,0,json.dumps(value),'')
             def run(args,**kw):
-                if args[:2]==['git','fetch'] or args[0]=='npm' or args[:2]==['git','-c'] and 'push' in args:
+                if args[:2]==['git','fetch'] or args[0]=='npm' or args[:2]==['git','-c'] and ('push' in args or 'ls-remote' in args):
                     return subprocess.CompletedProcess(args,0,'','')
                 if args[0]=='fake-node':
                     work=Path(args[3]);target=work/('src/dates.ts' if overlap else 'src/extra.ts');target.write_text('export const safe = true;\n')
@@ -65,7 +68,11 @@ class FeedbackReport(unittest.TestCase):
                 else:
                     review.main(c)
                     receipt=json.loads((state/'feedback-receipts.json').read_text())[0]
+                    if stalled:
+                        self.assertEqual(json.loads((state/'review-state.json').read_text())['2025-12-31'],{'status':'superseded','by':'2026-01-01'})
                     self.assertEqual(receipt['id'],REQ['id']);self.assertEqual(receipt['state'],'proposed');self.assertTrue(receipt['pr'].endswith('/2'))
+
+    def test_exhausted_older_report_does_not_block_new_review(self):self.exercise_review(stalled=True)
 
     def test_open_pr_allows_unrelated_work(self):self.exercise_review()
     def test_open_pr_overlap_rejected(self):self.exercise_review(True)

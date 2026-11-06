@@ -101,7 +101,7 @@ package registries. The jobs do not need root. Keep configuration/state director
 Copy `ops/` and `coding/codex.mjs` into `~/.local/lib/inkling-ops/`, preserving their relative paths. This installed
 trusted wrapper is **not automatically replaced by model-generated PRs**. Changes to maintenance controls require
 manual installation after review. Include `ops/probes/`, `software_report.py`, `software-report.mjs` and
-`review-instructions.md`, `review-targets.json`, `feedback_report.py`, `review_backlog.py` and `pr_ledger.py`; copying only the old entry points is insufficient. Configure each host using `ops/pi.example.json` or `ops/laptop.example.json` at
+`review-instructions.md`, `review-targets.json`, `feedback_report.py`, `review_backlog.py`, `pr_ledger.py`, `review_health.py` and `review-health.mjs`; copying only the old entry points is insufficient. Configure each host using `ops/pi.example.json` or `ops/laptop.example.json` at
 `~/.config/inkling-ops/config.json`. All deployment identities and locations belong in private configuration.
 
 Generate a random Restic password outside the repository and put it at `backup_password` on both hosts. Keep a
@@ -146,14 +146,32 @@ instance. Tokens may have been revoked since backup; reconnect Google if needed.
 emails or reconnects a copied WhatsApp session.
 
 Useful status files in the private state directory: `nightly.json`, `transfer.json`, `deploy.json`,
-`backup-last-success` (laptop), `review-state.json`, `last-review-validation.json`,
+`backup-last-success` (laptop), `review-state.json`, `review-health.json`, `review-worker-health.json`, `last-review-validation.json`,
 `software-reports/YYYY-MM-DD.json` (Pi), `last-software-review-input.json` and
 `last-software-review-prompt.txt` (laptop). `systemctl --user list-timers`
 shows schedules; journal entries report sanitized maintenance outcomes, never subprocess output or model text.
 `python3 ~/.local/lib/inkling-ops/ops/nightly.py --force` forces a recovery point;
 `python3 ~/.local/lib/inkling-ops/ops/deploy.py --retry` retries a previously failed revision after investigation.
-Stop a feature by disabling its timer. A failed laptop review leaves the report pending for retry; a completed PR
-is rediscovered after a crash instead of publishing a duplicate. Transfer notices can be delayed while either
+Stop a feature by disabling its timer. Each report has a maximum of three model attempts. An exhausted latest
+report produces a failed service/blocked health record, not a successful no-op. When newer reports arrive, the
+reviewer selects the newest complete synthetic report and marks older unfinished fixed reports superseded. It
+still fetches the current default branch and reruns all probes: missed nights do not require many identical model
+runs. Approved feedback is selected separately from the newest fresh snapshot; supersession never resurrects an
+old consented description. A missing publishing credential also produces a blocked state without consuming a
+model attempt.
+
+Health records contain closed stages/categories, a day and timestamps; worker health adds a bounded protocol-event
+count. They contain no model text, exception text, request descriptions, subprocess output or private chat data.
+`review-health.json` identifies preparation, worker, validation, publication and receipt failures. Worker health
+separately identifies sandbox, baseline, model and validation stages and classifies authentication/quota/transport
+failures without exposing raw errors. These health files stay on the laptop and are never model-review evidence.
+A model stage heartbeat shows the process is alive; the event count distinguishes actual protocol progress.
+
+A completed PR is rediscovered after a crash instead of publishing a duplicate. The publisher validates the full
+ledger before pushing. If a push succeeds but PR creation fails, the trusted host records its commit and can
+replace only that recorded nightly branch with an exact Git lease. An unknown commit or concurrent human change
+stops publication for manual review; it is never overwritten. Repository source updates still do not auto-install
+these trusted operations controls. Transfer notices can be delayed while either
 host or WhatsApp is offline. A crash between sending a notice and recording its receipt can duplicate that notice.
 
 ### Optional microphone HTTPS proxy
