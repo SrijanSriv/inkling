@@ -134,10 +134,11 @@ async function check(notify: (text: string) => Promise<void>, adminId: string): 
       const summary = (pr.body ?? "").split("**Request:**")[0].trim();
       const ready = update(c.id, { status: "ready", pr: pr.number, prUrl: pr.html_url, title: pr.title, summary, files })!;
       // Code asks, so the yes goes to confirm_send like any other draft; it counts for a day.
-      drafts.set(adminId, { kind: "deploy", to: c.id, name: pr.title, text: summary, createdAt: Date.now(), ttlMs: 24 * 60 * 60_000 });
+      drafts.delete(adminId);
       await notify(
         `Change ready: *${ready.title}*\n${summary}\n\nFiles: ${files.join(", ")}\n${pr.html_url}\n\nDeploy it? Reply yes, or tell me what to change.`,
       );
+      drafts.set(adminId, { kind: "deploy", to: c.id, name: pr.title, text: summary, createdAt: Date.now(), ttlMs: 24 * 60 * 60_000 });
     } else if (c.status === "deploying" && c.sha) {
       const runs = (await github(`/actions/workflows/deploy.yml/runs?head_sha=${c.sha}&per_page=5`)) as { workflow_runs: Run[] };
       const run = runs.workflow_runs[0];

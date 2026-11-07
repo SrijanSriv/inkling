@@ -133,8 +133,11 @@ export async function runLinkWorkflow(chat: string, actor: string, message: stri
       if (!summary || summary === "UNREADABLE" || summary.length > 5000) throw new Error("Invalid summary.");
       if (!(await valid())) { finish("failed"); return; }
       // Keep a truncation warning in code so a model omission cannot turn an excerpt into a complete read.
-      const coveredSummary = content.split("\n\n", 1)[0].includes("Coverage: partial,")
-        ? `Based on a truncated excerpt of the page:\n${summary}` : summary;
+      const header = content.split("\n\n", 1)[0];
+      const coveredSummary = header.includes("Coverage: partial,")
+        ? `Based on a truncated excerpt of the page:\n${summary}`
+        : header.includes("completeness unverified")
+          ? `Based on accessible page text; full article coverage is unverified:\n${summary}` : summary;
       const item = `${url}\n${coveredSummary}`;
       finish("prepared", { item, reply: `${coveredSummary}\n\nSaved to ${rule.list}.\n${url}` });
       receipt = load(chat).receipts.find(r => r.id === receipt!.id)!;
