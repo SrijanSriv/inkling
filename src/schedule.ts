@@ -15,7 +15,9 @@ import { takeDueWatches, type Watch } from "./watches.js";
 // tools and replies NOTHING when there's nothing worth saying. Runs once a minute; state survives restarts.
 
 export type Target = { kind: "person"; user: User } | { kind: "group"; chatId: string; chatJid: string };
-export type RunJob = (target: Target, prompt: string) => Promise<void>;
+// "returned" means the turn returned, not that every requested action completed.
+export type JobOutcome = "skipped" | "returned" | "uncertain";
+export type RunJob = (target: Target, prompt: string, started?: () => void) => Promise<JobOutcome>;
 
 type State = { brief: Record<string, string>; travel: Record<string, string>; dates: Record<string, string> };
 
@@ -46,17 +48,21 @@ async function tick(run: RunJob): Promise<void> {
     const person: Target = { kind: "person", user };
 
     if (user.briefTime && hm >= user.briefTime && hm < addHours(user.briefTime, 3) && state.brief[user.id] !== today) {
-      state.brief[user.id] = today;
-      save();
-      await run(person, briefPrompt(user));
+      await run(person, briefPrompt(user), () => {
+        // Persist the attempt before tools can run, but never consume a skipped slot.
+        state.brief[user.id] = today;
+        save();
+      });
     }
 
     if (googleAccounts(user.id).some((a) => a.gmail)) {
       const slot = hm >= "19:30" ? "pm" : hm >= "07:30" ? "am" : "";
       if (slot && state.travel[user.id] !== `${today}-${slot}`) {
-        state.travel[user.id] = `${today}-${slot}`;
-        save();
-        await run(person, travelPrompt(user));
+        await run(person, travelPrompt(user), () => {
+          // A partially executed travel turn must not be blindly replayed.
+          state.travel[user.id] = `${today}-${slot}`;
+          save();
+        });
       }
     }
 

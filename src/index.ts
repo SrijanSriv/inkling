@@ -416,24 +416,27 @@ async function linkPersonal(user: User): Promise<void> {
 }
 
 /** Runs a scheduled job (morning brief, dates, watches, travel) in a person's private chat or a group. */
-const runJob: RunJob = async (target, prompt) => {
-  if (!link.connected || handingOver) { recordIssue(target.kind === "person" ? target.user.id : target.chatId,"scheduled_skipped"); return; }
+const runJob: RunJob = async (target, prompt, started) => {
+  if (!link.connected || handingOver) { recordIssue(target.kind === "person" ? target.user.id : target.chatId,"scheduled_skipped"); return "skipped"; }
   const admin = getUsers().find((u) => u.admin) ?? getUsers()[0];
   const chatJid = target.kind === "person" ? `${target.user.phone}@s.whatsapp.net` : target.chatJid;
   const key = target.kind === "person" ? target.user.id : target.chatId;
   // Don't talk over a conversation that's in progress; the job runs again next time.
-  if (queues.get(key)?.busy) { recordIssue(key,"scheduled_skipped"); return; }
+  if (queues.get(key)?.busy) { recordIssue(key,"scheduled_skipped"); return "skipped"; }
   const queue = queues.get(key) ?? { busy: false, pending: [] };
   queues.set(key, queue);
   queue.busy = true;
   try {
     const chat = target.kind === "person" ? { id: key, user: target.user } : await groupChat(key, chatJid, admin);
+    started?.();
     log.info({ chat: key, job: prompt.slice(0, 40) }, "scheduled job");
     const reply = await respond(chat, [{ text: prompt, images: [], at: new Date() }], chatActions(chat, chatJid));
     if (reply) await sendReply(chatJid, reply);
+    return "returned";
   } catch (err) {
     recordIssue(key,"scheduled_failed");
     log.error({ chat: key, err }, "scheduled job failed");
+    return "uncertain";
   } finally {
     queue.busy = false;
     if (queue.pending.length) void drain(key, queue);
